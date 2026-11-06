@@ -5,38 +5,64 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>小鲸鱼 · 桌面端设置</title>
 <style>
-  :root { color-scheme: dark; --bg:#0b1020; --card:#151d33; --line:#26324f; --fg:#e8edf9; --muted:#93a1c0; --accent:#6c8cff; }
+  :root { color-scheme: dark; --bg:#0b1020; --card:#151d33; --panel:#111a2e; --line:#26324f; --fg:#e8edf9; --muted:#93a1c0; --accent:#6c8cff; --accent-soft:rgba(108,140,255,.16); }
   * { box-sizing:border-box; }
-  body { margin:0; padding:24px 24px 56px; background:var(--bg); color:var(--fg); font:14px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  body { margin:0; padding:28px 24px 64px; background:radial-gradient(900px 480px at 50% -12%, #17223f 0%, var(--bg) 62%) no-repeat, var(--bg); color:var(--fg); font:14px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif; }
   main { max-width:760px; margin:0 auto; }
-  h1 { font-size:18px; margin:0 0 4px; }
+  h1 { font-size:20px; margin:0 0 6px; letter-spacing:.4px; }
   .tag { color:var(--muted); font-size:12px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; margin-top:16px; }
-  h2 { font-size:14px; margin:0 0 10px; }
-  .hint { color:var(--muted); font-size:12px; margin:0 0 10px; }
-  textarea, input, select { background:#0e1528; border:1px solid var(--line); border-radius:10px; color:var(--fg); padding:10px 12px; font:inherit; outline:none; }
-  textarea:focus, input:focus, select:focus { border-color:var(--accent); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px 22px; margin-top:18px; }
+  h2 { font-size:15px; margin:0 0 10px; }
+  .hint { color:var(--muted); font-size:12px; margin:0 0 12px; }
+  textarea, input, select { background:#0e1528; border:1px solid var(--line); border-radius:10px; color:var(--fg); padding:9px 12px; font:inherit; outline:none; transition:border-color .15s, box-shadow .15s; }
+  textarea:focus, input:focus, select:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
   textarea { width:100%; min-height:110px; resize:vertical; }
-  input { width:140px; letter-spacing:2px; border-radius:9px; padding:7px 10px; }
-  select { border-radius:9px; padding:8px 10px; max-width:320px; }
-  input[type=number] { width:82px; letter-spacing:normal; }
-  label.field { color:var(--muted); font-size:12px; display:flex; gap:6px; align-items:center; }
-  .row { display:flex; gap:8px; margin-top:10px; align-items:center; flex-wrap:wrap; }
-  button { background:var(--accent); border:0; color:#fff; border-radius:9px; padding:8px 15px; font:inherit; cursor:pointer; }
-  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
-  .status { margin-left:auto; font-size:12px; color:var(--muted); }
-  code { background:#0e1528; border:1px solid var(--line); border-radius:6px; padding:3px 7px; font-size:12px; word-break:break-all; }
-  pre { margin:12px 0 0; padding:12px; background:#0e1528; border:1px solid var(--line); border-radius:10px; color:var(--fg); font-size:12px; line-height:1.6; max-height:320px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
-  .client { display:flex; gap:10px; align-items:center; padding:7px 0; border-bottom:1px solid var(--line); font-size:12px; }
+  input { width:150px; letter-spacing:2px; }
+  input[type=number] { width:88px; letter-spacing:normal; }
+  select { max-width:320px; }
+  label.field { color:var(--muted); font-size:12px; display:flex; gap:7px; align-items:center; }
+  .row { display:flex; gap:10px; margin-top:12px; align-items:center; flex-wrap:wrap; }
+  button { background:var(--accent); border:0; color:#fff; border-radius:10px; padding:9px 16px; font:inherit; font-size:13px; cursor:pointer; transition:filter .15s, border-color .15s, color .15s; }
+  button:hover { filter:brightness(1.12); }
+  button:active { filter:brightness(.94); }
+  button.ghost { background:var(--panel); border:1px solid var(--line); color:var(--fg); }
+  button.ghost:hover { border-color:#3a4c78; }
+  button.icon { width:34px; height:34px; padding:0; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; background:var(--panel); border:1px solid var(--line); color:var(--muted); }
+  button.icon:hover { border-color:var(--accent); color:var(--accent); filter:none; }
+  button.icon svg { display:block; }
+  button.icon.busy svg { animation:spin .9s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  button.danger { background:transparent; border:1px solid #7c2f3a; color:#ff9aa8; }
+  .status { font-size:12px; color:var(--muted); }
+  .row .status { margin-left:auto; }
+  code { background:#0e1528; border:1px solid var(--line); border-radius:8px; padding:4px 8px; font-size:12px; word-break:break-all; }
+  pre { margin:14px 0 0; padding:14px; background:#0e1528; border:1px solid var(--line); border-radius:10px; color:var(--fg); font-size:12px; line-height:1.6; max-height:320px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
+  .client { display:flex; gap:10px; align-items:center; padding:9px 0; border-bottom:1px solid var(--line); font-size:12px; }
   .client:last-child { border-bottom:0; }
-  #clients { padding-bottom:12px; }
   .client .id { flex:1; min-width:0; word-break:break-all; }
   .client .meta { color:var(--muted); }
-  details.diag summary { cursor:pointer; color:var(--muted); font-size:12px; }
-  details.diag[open] summary { margin-bottom:8px; }
   .dot { width:8px; height:8px; border-radius:50%; background:#4ade80; flex:0 0 8px; }
   .dot.off { background:var(--muted); }
   .dot.denied { background:#f87171; }
+  .roles { display:flex; flex-direction:column; gap:12px; }
+  .role { display:flex; gap:14px; align-items:flex-start; padding:14px 16px; border:1px solid var(--line); border-radius:12px; background:var(--panel); transition:border-color .15s, background .15s; }
+  .role:hover { border-color:#3a4c78; }
+  .role.active { border-color:var(--accent); background:#182342; box-shadow:inset 0 0 0 1px var(--accent-soft); }
+  .role .body { flex:1; min-width:0; }
+  .role .name { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:600; }
+  .role .badge { flex:0 0 auto; font-size:11px; font-weight:400; color:var(--accent); border:1px solid rgba(108,140,255,.55); background:var(--accent-soft); border-radius:999px; padding:1px 8px; }
+  .role .preview { color:var(--muted); font-size:12.5px; line-height:1.65; margin-top:6px; word-break:break-all; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .role .ops { flex:0 0 auto; display:flex; gap:8px; align-items:center; padding-top:2px; }
+  .role .ops button { padding:6px 12px; font-size:12px; }
+  dialog { width:min(580px, calc(100vw - 32px)); padding:22px 24px; border:1px solid var(--line); border-radius:16px; background:var(--card); color:var(--fg); }
+  dialog::backdrop { background:rgba(4,8,18,.74); }
+  dialog h2 { font-size:16px; margin:0 0 6px; }
+  dialog .hint { margin-bottom:16px; }
+  dialog label.field { margin-top:14px; display:block; }
+  dialog label.field + input, dialog label.field + textarea { margin-top:6px; }
+  dialog input.wide { width:100%; letter-spacing:normal; padding:10px 12px; }
+  dialog textarea { min-height:190px; }
+  dialog .row { margin-top:20px; }
 </style>
 </head>
 <body>
@@ -45,24 +71,28 @@
   <div class="tag">角色、记忆和声音都在这里调。</div>
 
   <section class="card">
-    <h2>角色定义</h2>
-    <p class="hint">点保存后，下一轮对话生效。</p>
-    <textarea id="persona" spellcheck="false"></textarea>
-    <div class="row"><button id="savePersona">保存角色</button><span class="status" id="status"></span></div>
+    <h2>角色</h2>
+    <p class="hint">可以存多个角色，对话只用「使用中」的那一个；点「编辑」在弹窗里改详情。</p>
+    <div class="roles" id="roles"><div class="hint">读取中…</div></div>
+    <div class="row">
+      <button id="newRole">新增角色</button>
+      <span class="status" id="status"></span>
+    </div>
   </section>
 
   <section class="card">
     <h2>声音</h2>
-    <p class="hint">所有设备共用这把声音，保存后下一句生效（电脑需要联网）。</p>
+    <p class="hint">所有设备共用这把声音，改完自动保存，下一句生效（电脑需要联网）。</p>
     <div class="row">
       <select id="ttsVoice" title="Edge 音色"></select>
-      <button class="ghost" id="ttsLive">刷新在线音色</button>
+      <button class="icon" id="ttsLive" title="刷新在线音色" aria-label="刷新在线音色">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1" /><path d="M20.5 3.5v5h-5" /></svg>
+      </button>
     </div>
     <div class="row">
       <label class="field">语速 %<input id="ttsRate" type="number" min="-50" max="100" step="1" /></label>
       <label class="field">音调 Hz<input id="ttsPitch" type="number" min="-50" max="50" step="1" /></label>
-      <button class="ghost" id="ttsPreview">试听</button>
-      <button id="saveTts">保存音色</button>
+      <button id="ttsPreview">试听</button>
       <span class="status" id="ttsStatus"></span>
     </div>
   </section>
@@ -72,7 +102,7 @@
     <p class="hint">每轮对话自动记一条，下次见面还认得你。</p>
     <div class="row">
       <code id="memoryPath">读取中…</code>
-      <button class="ghost" id="openLog">打开日志</button>
+      <button id="openLog">打开日志</button>
       <button class="ghost" id="copyPath">复制路径</button>
       <span class="status" id="logStatus"></span>
     </div>
@@ -81,11 +111,10 @@
 
   <section class="card">
     <h2>配对码</h2>
-    <p class="hint">手机连接时填这个，保存后立即生效；本机不用填。</p>
+    <p class="hint">手机连接时填这个，改完立即生效；本机不用填。</p>
     <div class="row">
       <input id="pin" inputmode="numeric" maxlength="8" autocomplete="off" />
-      <button id="savePin">保存配对码</button>
-      <button class="ghost" id="regen">换一个</button>
+      <button id="regen">换一个</button>
       <span class="status" id="pinStatus"></span>
     </div>
   </section>
@@ -94,13 +123,37 @@
     <h2>在线设备</h2>
     <p class="hint">最近 5 分钟内连过的设备。</p>
     <div id="clients"><div class="hint">读取中…</div></div>
+    <div class="row">
+      <button id="refreshClients">刷新</button>
+      <span class="status" id="clientStatus"></span>
+    </div>
   </section>
 
-  <details class="card diag" id="diag">
-    <summary>运行状态</summary>
+  <section class="card">
+    <h2>运行状态</h2>
     <div class="hint" id="runtime"></div>
-  </details>
+    <div class="row">
+      <button id="diagCheck">检查</button>
+      <span class="status" id="diagStatus"></span>
+    </div>
+  </section>
 </main>
+
+<dialog id="roleDialog">
+  <h2 id="roleTitle">角色详情</h2>
+  <p class="hint">名字只影响这一页，角色定义才会进对话。</p>
+  <label class="field" for="roleName">名称</label>
+  <input id="roleName" class="wide" maxlength="40" autocomplete="off" />
+  <label class="field" for="rolePersona">角色定义</label>
+  <textarea id="rolePersona" spellcheck="false" placeholder="例如：你叫马飞飞，是一只可爱的肥鲸鱼……"></textarea>
+  <div class="row">
+    <button id="roleSave">保存</button>
+    <button class="ghost" id="roleUse">设为使用中</button>
+    <button class="danger" id="roleDelete">删除</button>
+    <button class="ghost" id="roleClose">取消</button>
+    <span class="status" id="roleStatus"></span>
+  </div>
+</dialog>
 <script>
 const $ = (id) => document.getElementById(id)
 
@@ -110,13 +163,25 @@ function setStatus(text, id = 'status') {
   setTimeout(() => { if (el.textContent === text) el.textContent = '' }, 2500)
 }
 
+let roleBook = { roles: [], activeRoleId: null }
+let pinSaved = ''
+
+function applyRoles(data) {
+  roleBook = {
+    roles: Array.isArray(data.roles) ? data.roles : [],
+    activeRoleId: data.activeRoleId ?? null,
+  }
+  renderRoles()
+}
+
 async function load() {
-  const res = await fetch('/api/dsh-channel/state')
+  const res = await fetch('/api/dsh-voice-channel/state')
   if (!res.ok) throw new Error(await res.text())
   const data = await res.json()
-  $('persona').value = data.persona ?? ''
-  $('pin').value = data.pin ?? ''
-  $('pin').placeholder = data.pin ? '' : '重载 Desktop 后可见'
+  applyRoles(data)
+  pinSaved = data.pin ?? ''
+  $('pin').value = pinSaved
+  $('pin').placeholder = pinSaved ? '' : '重载 Desktop 后可见'
   $('memoryPath').textContent = data.memoryLogPath ?? '重载 Desktop 后可用'
   applyTts(data.tts ?? {})
   const r = data.runtime ?? {}
@@ -126,32 +191,34 @@ async function load() {
   $('runtime').textContent = line
 }
 
-// 展开「运行状态」时才查一次健康检查，避免首页多打一个请求。
-$('diag').ontoggle = async () => {
-  if (!$('diag').open) return
+// 运行状态：点「检查」才查一次健康检查，避免首页多打请求。
+$('diagCheck').onclick = async () => {
   const box = $('runtime')
   const base = box.dataset.base ?? ''
+  setStatus('检查中…', 'diagStatus')
   try {
     const h = await (await fetch('/api/health')).json()
     const asr = h.asr?.ready ? '就绪' : '待命'
     const tts = h.tts?.ready ? '就绪' : '待命'
     box.textContent = `${base} · 识别：${asr} · 合成：${tts}`
-  } catch {
+    setStatus('已更新', 'diagStatus')
+  } catch (error) {
     box.textContent = base
+    setStatus(`失败：${error.message}`, 'diagStatus')
   }
 }
 
 async function save(statusId, payload) {
-  const res = await fetch('/api/dsh-channel/state', {
+  const res = await fetch('/api/dsh-voice-channel/state', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   })
   if (!res.ok) throw new Error(await res.text())
   const data = await res.json()
-  $('persona').value = data.persona ?? ''
-  if (data.pin) $('pin').value = data.pin
+  if (data.pin) { pinSaved = data.pin; $('pin').value = pinSaved }
   if (data.tts) applyTts(data.tts)
+  if (data.roles) applyRoles(data)
   setStatus('已保存', statusId)
 }
 
@@ -211,7 +278,38 @@ async function loadVoices(live) {
   }
 }
 
-$('ttsLive').onclick = () => loadVoices(true)
+$('ttsLive').onclick = async () => {
+  const btn = $('ttsLive')
+  btn.classList.add('busy')
+  try { await loadVoices(true) } finally { btn.classList.remove('busy') }
+}
+
+// 没有保存按钮：换音色 / 改语速音调都直接落盘（输入停 600ms 再提交）。
+let ttsTimer = null
+
+function pushTts() {
+  return save('ttsStatus', {
+    tts: {
+      voice: $('ttsVoice').value,
+      rate: Number($('ttsRate').value) || 0,
+      pitch: Number($('ttsPitch').value) || 0,
+    },
+  }).catch((error) => setStatus(`失败：${error.message}`, 'ttsStatus'))
+}
+
+function queueTtsSave() {
+  clearTimeout(ttsTimer)
+  ttsTimer = setTimeout(() => {
+    // 输入框停在半截数字（空 / 只有负号）时先不提交，免得被服务端回写打断输入。
+    if (!/^-?\d+$/.test($('ttsRate').value.trim())) return
+    if (!/^-?\d+$/.test($('ttsPitch').value.trim())) return
+    pushTts()
+  }, 600)
+}
+
+$('ttsVoice').onchange = () => pushTts()
+$('ttsRate').oninput = queueTtsSave
+$('ttsPitch').oninput = queueTtsSave
 
 $('ttsPreview').onclick = async () => {
   const payload = {
@@ -239,25 +337,18 @@ $('ttsPreview').onclick = async () => {
   }
 }
 
-$('saveTts').onclick = () => save('ttsStatus', {
-  tts: {
-    voice: $('ttsVoice').value,
-    rate: Number($('ttsRate').value) || 0,
-    pitch: Number($('ttsPitch').value) || 0,
-  },
-}).catch((error) => setStatus(`失败：${error.message}`, 'ttsStatus'))
-
 function timeOf(ms) {
   const d = new Date(ms)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
 }
 
-async function loadClients() {
+async function loadClients(announce) {
   const box = $('clients')
   try {
-    const res = await fetch('/dsh-channel/clients')
+    const res = await fetch('/dsh-voice-channel/clients')
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const rows = await res.json()
+    if (announce) setStatus(rows.length ? `已刷新 ${rows.length} 台` : '暂无设备', 'clientStatus')
     box.textContent = ''
     if (!rows.length) {
       const empty = document.createElement('div')
@@ -283,12 +374,177 @@ async function loadClients() {
     }
   } catch (error) {
     box.textContent = String(error.message).includes('404') ? '需重载 Desktop 后可用' : `读取失败：${error.message}`
+    if (announce) setStatus('刷新失败', 'clientStatus')
   }
 }
 
-$('savePersona').onclick = () => save('status', { persona: $('persona').value }).catch((e) => setStatus(`失败：${e.message}`, 'status'))
-$('savePin').onclick = () => save('pinStatus', { pin: $('pin').value }).catch((e) => setStatus(`失败：${e.message}`, 'pinStatus'))
-$('regen').onclick = () => { $('pin').value = String(Math.floor(100000 + Math.random() * 900000)); setStatus('已生成，点「保存 PIN」生效', 'pinStatus') }
+$('refreshClients').onclick = () => loadClients(true)
+
+// ---- 角色管理：列表点编辑，弹窗里改详情，保存即整表提交 ----
+let editingRole = null
+
+function blankRole() {
+  return { id: `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, name: '', persona: '' }
+}
+
+function renderRoles() {
+  const box = $('roles')
+  box.textContent = ''
+  if (!roleBook.roles.length) {
+    const empty = document.createElement('div')
+    empty.className = 'hint'
+    empty.textContent = '还没有角色，点下面「新增角色」建一个。'
+    box.append(empty)
+    return
+  }
+  for (const role of roleBook.roles) {
+    const active = role.id === roleBook.activeRoleId
+    const line = document.createElement('div')
+    line.className = `role${active ? ' active' : ''}`
+    const body = document.createElement('div')
+    body.className = 'body'
+    const name = document.createElement('div')
+    name.className = 'name'
+    name.append(document.createTextNode(role.name || '未命名角色'))
+    if (active) {
+      const badge = document.createElement('span')
+      badge.className = 'badge'
+      badge.textContent = '使用中'
+      name.append(badge)
+    }
+    const preview = document.createElement('div')
+    preview.className = 'preview'
+    preview.textContent = String(role.persona ?? '').trim() || '（角色定义为空）'
+    body.append(name, preview)
+    const ops = document.createElement('div')
+    ops.className = 'ops'
+    if (!active) {
+      const use = document.createElement('button')
+      use.textContent = '启用'
+      use.onclick = () => activateRole(role.id)
+      ops.append(use)
+    }
+    const edit = document.createElement('button')
+    edit.className = 'ghost'
+    edit.textContent = '编辑'
+    edit.onclick = () => openRole(role.id)
+    ops.append(edit)
+    line.append(body, ops)
+    box.append(line)
+  }
+}
+
+function pushRoles(roles, activeRoleId, statusId, text) {
+  return save(statusId, { roles, activeRoleId }).then(() => text && setStatus(text, statusId))
+}
+
+function activateRole(roleId) {
+  pushRoles(roleBook.roles, roleId, 'status', '已切换').catch((error) => setStatus(`失败：${error.message}`, 'status'))
+}
+
+function openRole(roleId) {
+  const found = roleId ? roleBook.roles.find((item) => item.id === roleId) : null
+  editingRole = found ? { ...found } : blankRole()
+  $('roleTitle').textContent = found ? '编辑角色' : '新增角色'
+  $('roleName').value = editingRole.name
+  $('rolePersona').value = editingRole.persona
+  $('roleDelete').hidden = !found
+  $('roleUse').hidden = !found || editingRole.id === roleBook.activeRoleId
+  $('roleStatus').textContent = ''
+  $('roleDialog').showModal()
+  ;(found ? $('rolePersona') : $('roleName')).focus()
+}
+
+function draftOf() {
+  return {
+    name: $('roleName').value.trim() || '未命名角色',
+    persona: $('rolePersona').value,
+  }
+}
+
+$('newRole').onclick = () => openRole(null)
+$('roleClose').onclick = () => $('roleDialog').close()
+$('roleDialog').onclose = () => { editingRole = null }
+
+$('roleSave').onclick = async () => {
+  if (!editingRole) return
+  if (!$('roleName').value.trim()) { setStatus('先给角色起个名字', 'roleStatus'); $('roleName').focus(); return }
+  const draft = draftOf()
+  const exists = roleBook.roles.some((role) => role.id === editingRole.id)
+  const roles = exists
+    ? roleBook.roles.map((role) => (role.id === editingRole.id ? { ...role, ...draft } : role))
+    : [...roleBook.roles, { ...editingRole, ...draft }]
+  // 新增的角色直接切为使用中，省一次点「启用」。
+  const activeRoleId = exists ? roleBook.activeRoleId : editingRole.id
+  try {
+    await pushRoles(roles, activeRoleId, 'status', exists ? '已保存' : '已新增')
+    $('roleDialog').close()
+  } catch (error) {
+    setStatus(`失败：${error.message}`, 'roleStatus')
+  }
+}
+
+$('roleUse').onclick = async () => {
+  if (!editingRole) return
+  const roles = roleBook.roles.map((role) => (role.id === editingRole.id ? { ...role, ...draftOf() } : role))
+  try {
+    await pushRoles(roles, editingRole.id, 'status', '已切换')
+    $('roleDialog').close()
+  } catch (error) {
+    setStatus(`失败：${error.message}`, 'roleStatus')
+  }
+}
+
+$('roleDelete').onclick = async () => {
+  if (!editingRole) return
+  const role = roleBook.roles.find((item) => item.id === editingRole.id)
+  if (!role) return
+  if (roleBook.roles.length <= 1) { setStatus('至少保留一个角色', 'roleStatus'); return }
+  if (!confirm(`删除角色「${role.name || '未命名'}」？`)) return
+  const roles = roleBook.roles.filter((item) => item.id !== role.id)
+  const activeRoleId = role.id === roleBook.activeRoleId ? roles[0].id : roleBook.activeRoleId
+  try {
+    await pushRoles(roles, activeRoleId, 'status', '已删除')
+    $('roleDialog').close()
+  } catch (error) {
+    setStatus(`失败：${error.message}`, 'roleStatus')
+  }
+}
+
+// ---- 配对码：没有保存按钮，改完 / 换一个 都直接落盘 ----
+let pinTimer = null
+
+function commitPin(value) {
+  pinSaved = value
+  save('pinStatus', { pin: value }).catch((error) => {
+    setStatus(`失败：${error.message}`, 'pinStatus')
+    load().catch(() => {})
+  })
+}
+
+$('pin').oninput = () => {
+  clearTimeout(pinTimer)
+  const value = $('pin').value.trim()
+  if (!/^\d{4,8}$/.test(value)) return
+  pinTimer = setTimeout(() => commitPin(value), 500)
+}
+
+$('pin').onblur = () => {
+  clearTimeout(pinTimer)
+  const value = $('pin').value.trim()
+  if (!/^\d{4,8}$/.test(value)) {
+    $('pin').value = pinSaved
+    setStatus('配对码需 4-8 位数字', 'pinStatus')
+    return
+  }
+  if (value !== pinSaved) commitPin(value)
+}
+
+$('regen').onclick = () => {
+  const value = String(Math.floor(100000 + Math.random() * 900000))
+  $('pin').value = value
+  commitPin(value)
+}
 let logOpen = false
 $('openLog').onclick = async () => {
   const box = $('logView')
@@ -299,7 +555,7 @@ $('openLog').onclick = async () => {
     return
   }
   try {
-    const res = await fetch('/dsh-channel/memory.log')
+    const res = await fetch('/dsh-voice-channel/memory.log')
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     box.textContent = (await res.text()) || '（暂无记忆）'
     box.hidden = false

@@ -20,7 +20,7 @@ const server = http.createServer(async (req, res) => {
   }
   try {
     if (req.method === 'GET' && url.pathname === '/api/health') {
-      send(res, 200, { ok: true, service: 'dsh-channel-asr', port: PORT, asr: asr.status(), tts: tts.status() })
+      send(res, 200, { ok: true, service: 'dsh-voice-channel-asr', port: PORT, asr: asr.status(), tts: tts.status() })
       return
     }
     if (req.method === 'POST' && url.pathname === '/api/asr') {
@@ -43,9 +43,9 @@ const server = http.createServer(async (req, res) => {
 })
 
 server.listen(PORT, HOST, () => {
-  console.log(`[dsh-channel][asr] listening on http://${HOST}:${PORT}/api/asr`)
+  console.log(`[dsh-voice-channel][asr] listening on http://${HOST}:${PORT}/api/asr`)
 })
-server.on('error', (error) => console.error('[dsh-channel][asr] server error:', error.message))
+server.on('error', (error) => console.error('[dsh-voice-channel][asr] server error:', error.message))
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {

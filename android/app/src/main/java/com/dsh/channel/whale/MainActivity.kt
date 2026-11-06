@@ -32,6 +32,11 @@ class MainActivity : ComponentActivity() {
                 pendingCall = false
             }
 
+            // 导入形象包：让系统文件选择器挑一个 zip（不限 mime，部分管理器不标 application/zip）。
+            val pickPack = rememberLauncherForActivityResult(
+                ActivityResultContracts.OpenDocument()
+            ) { uri -> uri?.let { vm.importPack(it) } }
+
             DshWhaleTheme {
                 WhaleScreen(
                     state = state,
@@ -54,6 +59,9 @@ class MainActivity : ComponentActivity() {
                     onScan = vm::scan,
                     onConnect = vm::connect,
                     onChooseFound = { vm.editEndpoint(it.baseUrl) },
+                    onPack = vm::selectPack,
+                    onImport = { pickPack.launch(arrayOf("*/*")) },
+                    onDeletePack = vm::deletePack,
                 )
             }
         }

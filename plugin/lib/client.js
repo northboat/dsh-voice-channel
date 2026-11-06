@@ -1,19 +1,19 @@
 // DSH Web 前端插件：在左侧边栏注册入口，主面板用同源 iframe 打开管理页。
 window.__ModuleLoader__.load({
-  id: 'dsh-channel',
+  id: 'dsh-voice-channel',
   factory: (require) => {
     const module = { exports: {} }
     const React = require('react')
-    const PANEL_ID = 'dsh-channel:panel'
+    const PANEL_ID = 'dsh-voice-channel:panel'
 
-    const LABEL = 'dsh-channel-charactor'
+    const LABEL = 'dsh-voice-channel'
     const MainPanel = () => React.createElement('iframe', {
-      src: '/dsh-channel/admin',
+      src: '/dsh-voice-channel/admin',
       title: LABEL,
       style: { display: 'block', width: '100%', height: '100%', minHeight: '100vh', border: 0, background: 'transparent' },
     })
     const SidebarIcon = ({ size = 18 }) => React.createElement('span', {
-      'data-dsh-plugin': 'dsh-channel',
+      'data-dsh-plugin': 'dsh-voice-channel',
       'data-dsh-part': 'sidebar-icon',
       style: { display: 'inline-flex' },
     }, React.createElement('svg', {

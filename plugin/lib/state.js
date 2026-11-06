@@ -8,8 +8,11 @@ const DIR = path.join(HERE, '..', 'data')
 const FILE = path.join(DIR, 'state.json')
 export const MEMORY_PATH = path.join(DIR, 'memory.log')
 
-export const DEFAULT_PERSONA = '你是 dsh-channel 的桌宠助手。用中文简洁、友好地回答，不写废话。'
+export const DEFAULT_PERSONA = '你是 dsh-voice-channel 的桌宠助手。用中文简洁、友好地回答，不写废话。'
 export const INJECT_MEMORY = 20
+export const MAX_ROLES = 30
+export const MAX_PERSONA = 8000
+const DEFAULT_ROLE_NAME = '默认角色'
 
 // 音色是服务端的唯一出口（client 只发文本），所以配置存在这里，管理页可改、重启后仍在。
 export const DEFAULT_TTS = { voice: 'zh-CN-XiaoxiaoNeural', rate: 0, pitch: 0 }
@@ -44,8 +47,39 @@ export function normalizeTts(value) {
   }
 }
 
+export function newRoleId() {
+  return `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+}
+
+/** 角色列表归一化：补 id、去重复、截断超长字段；空列表回落到一个默认角色。 */
+export function normalizeRoles(value, fallbackPersona) {
+  const rows = Array.isArray(value) ? value.slice(0, MAX_ROLES) : []
+  const seen = new Set()
+  const roles = []
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue
+    let id = String(row.id ?? '').trim().slice(0, 64)
+    if (!id || seen.has(id)) id = newRoleId()
+    seen.add(id)
+    roles.push({
+      id,
+      name: String(row.name ?? '').trim().slice(0, 40) || DEFAULT_ROLE_NAME,
+      persona: String(row.persona ?? '').slice(0, MAX_PERSONA),
+    })
+  }
+  if (!roles.length) {
+    roles.push({ id: newRoleId(), name: DEFAULT_ROLE_NAME, persona: String(fallbackPersona ?? DEFAULT_PERSONA).slice(0, MAX_PERSONA) })
+  }
+  return roles
+}
+
+function activeOf(roles, wanted) {
+  return roles.some((role) => role.id === wanted) ? String(wanted) : roles[0].id
+}
+
 function defaults() {
-  return { persona: DEFAULT_PERSONA, memory: [], sessionId: null, pin: randomPin(), tts: DEFAULT_TTS }
+  const roles = normalizeRoles([], DEFAULT_PERSONA)
+  return { roles, activeRoleId: roles[0].id, persona: DEFAULT_PERSONA, memory: [], sessionId: null, pin: randomPin(), tts: DEFAULT_TTS }
 }
 
 // memory.log 是 JSONL：每行 {time, role, text}，全量保留；注入 prompt 时只取最近 INJECT_MEMORY 条。
@@ -82,15 +116,21 @@ export function readState() {
     // 旧版把 memory[] 存进 state.json；一次性迁到 memory.log。
     memory = Array.isArray(raw.memory) ? raw.memory : []
   }
+  // 旧版只有一个 persona 字段：首次读到时把它迁成唯一角色。
+  const legacyPersona = typeof raw.persona === 'string' ? raw.persona : DEFAULT_PERSONA
+  const roles = normalizeRoles(raw.roles, legacyPersona)
+  const activeRoleId = activeOf(roles, raw.activeRoleId)
   const state = {
-    persona: typeof raw.persona === 'string' ? raw.persona : DEFAULT_PERSONA,
+    roles,
+    activeRoleId,
+    persona: roles.find((role) => role.id === activeRoleId).persona,
     memory,
     sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : null,
     pin: validPin(raw.pin) ? String(raw.pin) : randomPin(),
     tts: normalizeTts(raw.tts),
   }
-  // 首次运行生成 PIN / 清理旧 state.json 里的 memory 字段。
-  if (migrated || !validPin(raw.pin) || Array.isArray(raw.memory)) writeState(state)
+  // 首次运行生成 PIN / 清理旧 state.json 里的 memory 字段 / 迁移角色列表。
+  if (migrated || !validPin(raw.pin) || Array.isArray(raw.memory) || !Array.isArray(raw.roles)) writeState(state)
   return state
 }
 
@@ -102,13 +142,37 @@ function persistDefaults() {
 
 export function writeState(state) {
   mkdirSync(DIR, { recursive: true })
+  // persona 始终是「当前角色」的文本，chat.js 只读它，不必知道角色的存在。
+  const roles = normalizeRoles(state.roles, String(state.persona ?? DEFAULT_PERSONA))
+  const activeRoleId = activeOf(roles, state.activeRoleId)
   writeFileSync(FILE, JSON.stringify({
-    persona: String(state.persona ?? ''),
+    persona: roles.find((role) => role.id === activeRoleId).persona,
+    roles,
+    activeRoleId,
     sessionId: state.sessionId ?? null,
     pin: validPin(state.pin) ? String(state.pin) : randomPin(),
     tts: normalizeTts(state.tts),
   }, null, 2), 'utf8')
   writeMemory(state.memory)
+}
+
+/**
+ * 管理页的局部写入：payload 里出现哪个字段就改哪个。
+ * roles 整表替换（新增 / 编辑 / 删除都走它）；persona 改的是当前角色。
+ */
+export function patchState(current, payload) {
+  const next = { ...current }
+  if (Array.isArray(payload.roles)) {
+    next.roles = normalizeRoles(payload.roles, current.persona)
+    const wanted = typeof payload.activeRoleId === 'string' ? payload.activeRoleId : current.activeRoleId
+    next.activeRoleId = activeOf(next.roles, wanted)
+  } else if (typeof payload.activeRoleId === 'string' && current.roles.some((role) => role.id === payload.activeRoleId)) {
+    next.activeRoleId = payload.activeRoleId
+  }
+  if (typeof payload.persona === 'string') {
+    next.roles = next.roles.map((role) => (role.id === next.activeRoleId ? { ...role, persona: payload.persona } : role))
+  }
+  return next
 }
 
 export function contextOf(state) {

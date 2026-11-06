@@ -2,7 +2,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { readState, writeState, MEMORY_PATH, validPin } from './state.js'
+import { readState, writeState, patchState, MEMORY_PATH, validPin } from './state.js'
 import { asr } from './asr.js'
 import { handleAsr } from './asr_http.js'
 import { tts } from './tts.js'
@@ -198,6 +198,8 @@ function bridgeState(res, req) {
   const local = isLoopback(req)
   send(res, 200, {
     persona: state.persona,
+    roles: state.roles,
+    activeRoleId: state.activeRoleId,
     memory: local ? state.memory : [],
     sessionId: state.sessionId,
     tts: state.tts,
@@ -213,23 +215,23 @@ function bridgeState(res, req) {
 }
 
 async function handleBridge(req, res, pathname) {
-  if (pathname === '/dsh-channel/memory.log' && req.method === 'GET') {
+  if (pathname === '/dsh-voice-channel/memory.log' && req.method === 'GET') {
     if (!isLoopback(req)) { send(res, 401, { error: 'local only' }); return true }
     let text = ''
     try { text = readFileSync(MEMORY_PATH, 'utf8') } catch { /* 尚未产生记忆 */ }
     send(res, 200, text, 'text/plain; charset=utf-8')
     return true
   }
-  if (pathname === '/dsh-channel/clients' && req.method === 'GET') {
+  if (pathname === '/dsh-voice-channel/clients' && req.method === 'GET') {
     if (!isLoopback(req)) { send(res, 401, { error: 'local only' }); return true }
     send(res, 200, clientList())
     return true
   }
-  if (pathname === '/admin' || pathname === '/dsh-channel/admin') {
+  if (pathname === '/admin' || pathname === '/dsh-voice-channel/admin') {
     send(res, 200, readFileSync(ADMIN_PATH, 'utf8'), 'text/html; charset=utf-8')
     return true
   }
-  if (pathname !== '/api/dsh-channel/state') return false
+  if (pathname !== '/api/dsh-voice-channel/state') return false
   if (req.method === 'GET') { bridgeState(res, req); return true }
   if (req.method === 'POST') {
     let raw = ''
@@ -238,9 +240,7 @@ async function handleBridge(req, res, pathname) {
     try { payload = JSON.parse(raw || '{}') } catch { send(res, 400, { error: 'invalid JSON' }); return true }
     const current = readState()
     writeState({
-      persona: typeof payload.persona === 'string' ? payload.persona : current.persona,
-      memory: current.memory,
-      sessionId: current.sessionId,
+      ...patchState(current, payload),
       pin: isLoopback(req) && validPin(payload.pin) ? String(payload.pin) : current.pin,
       tts: payload.tts && typeof payload.tts === 'object' ? payload.tts : current.tts,
     })
@@ -303,7 +303,7 @@ export function createServer() {
   return server
 }
 
-export const name = 'dsh-channel'
+export const name = 'dsh-voice-channel'
 
 export function apply(ctx) {
   runtimeCtx = ctx || null
@@ -343,7 +343,7 @@ export function apply(ctx) {
     try { runtimeInfo.webPort = web.port ?? web.address?.()?.port ?? web.server?.address?.()?.port } catch { /* ignore */ }
     const token = web.token ?? web.launchToken ?? web.config?.token
     if (token) { runtimeInfo.webTokenFound = true; runtimeInfo.__token = String(token) }
-    // 同源路由：左侧边栏主面板用 iframe 打开 /dsh-channel/admin，管理 API 走同源。
+    // 同源路由：左侧边栏主面板用 iframe 打开 /dsh-voice-channel/admin，管理 API 走同源。
     // prefix 不能带尾斜杠：WebServer.match() 用 startsWith(prefix + '/') 判定。
     const bridgeHandler = async (req, res) => {
       const pathname = new URL(req.url || '/', 'http://localhost').pathname
@@ -351,8 +351,8 @@ export function apply(ctx) {
       if (!handled) send(res, 404, { error: 'not found' })
     }
     try {
-      web.register({ kind: 'prefix', path: '/dsh-channel', handler: bridgeHandler })
-      web.register({ kind: 'exact', path: '/api/dsh-channel/state', handler: bridgeHandler })
+      web.register({ kind: 'prefix', path: '/dsh-voice-channel', handler: bridgeHandler })
+      web.register({ kind: 'exact', path: '/api/dsh-voice-channel/state', handler: bridgeHandler })
       runtimeInfo.bridgeRoutes = true
     } catch (error) {
       runtimeInfo.bridgeRouteError = String(error?.message ?? error)
@@ -377,8 +377,8 @@ export function apply(ctx) {
   }
 
   const server = createServer()
-  server.listen(PORT, HOST, () => console.log(`[dsh-channel] client endpoint http://localhost:${PORT}`))
-  server.on('error', (error) => console.error('[dsh-channel] server error:', error.message))
+  server.listen(PORT, HOST, () => console.log(`[dsh-voice-channel] client endpoint http://localhost:${PORT}`))
+  server.on('error', (error) => console.error('[dsh-voice-channel] server error:', error.message))
   return () => {
     server.close()
     asr.dispose()
@@ -391,9 +391,9 @@ export function apply(ctx) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const server = createServer()
-  server.listen(PORT, HOST, () => console.log(`[dsh-channel] demo backend, open http://localhost:${PORT}`))
+  server.listen(PORT, HOST, () => console.log(`[dsh-voice-channel] demo backend, open http://localhost:${PORT}`))
   server.on('error', (error) => {
-    console.error(`[dsh-channel] cannot listen on ${HOST}:${PORT}: ${error.message}`)
+    console.error(`[dsh-voice-channel] cannot listen on ${HOST}:${PORT}: ${error.message}`)
     process.exitCode = 1
   })
 }

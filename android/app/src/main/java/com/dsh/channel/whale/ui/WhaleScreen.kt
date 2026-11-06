@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -69,7 +70,11 @@ fun WhaleScreen(
     onScan: () -> Unit,
     onConnect: () -> Unit,
     onChooseFound: (LanDiscovery.Found) -> Unit,
+    onPack: (String) -> Unit,
+    onImport: () -> Unit,
+    onDeletePack: (String) -> Unit,
 ) {
+    val pack = remember(state.packs, state.packId) { AvatarPacks.find(state.packs, state.packId) }
     LaunchedEffect(state.message) {
         if (state.message != null) {
             delay(8000)
@@ -104,6 +109,7 @@ fun WhaleScreen(
             WhaleAvatar(
                 emotion = state.emotion,
                 phase = state.phase,
+                pack = pack,
                 modifier = Modifier.size(260.dp),
             )
             Spacer(Modifier.height(20.dp))
@@ -180,6 +186,9 @@ fun WhaleScreen(
                 onScan = onScan,
                 onConnect = onConnect,
                 onChooseFound = onChooseFound,
+                onPack = onPack,
+                onImport = onImport,
+                onDeletePack = onDeletePack,
             )
         }
     }

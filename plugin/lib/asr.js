@@ -102,7 +102,7 @@ class VoskAsr {
 
       child.stderr.on('data', (chunk) => {
         const text = chunk.toString('utf8').trim()
-        if (text) console.error('[dsh-channel][asr]', text)
+        if (text) console.error('[dsh-voice-channel][asr]', text)
       })
 
       child.on('exit', (code) => {

@@ -3,6 +3,7 @@ package com.dsh.channel.whale.voice
 import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
@@ -60,7 +61,10 @@ class CallSpeechInput(
         const val MAX_THRESHOLD = 2500f
         const val PLAY_MIN_THRESHOLD = 700f      // 朗读期间的打断门限下限
         const val ONSET_MS = 200f                // 静默时确认开口所需时长
-        const val ONSET_PLAY_MS = 320f           // 朗读时确认打断所需时长
+        const val ONSET_PLAY_MS = 320f           // 朗读时确认打断所需时长（有 AEC）
+        const val ONSET_PLAY_NO_AEC_MS = 600f    // 无 AEC 时更保守，压掉回声误触发
+        const val ECHO_LEARN_MS = 300f           // 朗读开始后用来学回声峰值的窗口
+        const val ECHO_GAIN = 2.5f               // 回声峰值 → 打断门限的倍数
         const val MIN_SPEECH_MS = 300f           // 短于此的片段视为噪声
         const val SILENCE_MS = 700f              // 句尾静音判据
         const val MAX_MS = 15_000f               // 单句上限
@@ -69,6 +73,13 @@ class CallSpeechInput(
 
     private val asr = AsrClient()
     private val main = Handler(Looper.getMainLooper())
+    private val audioManager =
+        context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+    /** 通话期间切到通信模式（平台 AEC 的前提），退出时恢复。 */
+    private var callAudioMode = false
+    private var prevAudioMode = AudioManager.MODE_NORMAL
+    private var prevSpeakerOn = false
 
     @Volatile private var running = false
     @Volatile private var generation = 0
@@ -99,6 +110,48 @@ class CallSpeechInput(
             return
         }
 
+        // 优先走通信模式 + VOICE_COMMUNICATION：平台 AEC 只在这条链路上生效，
+        // 否则外放时自己的朗读会被当成用户插话，来回自打断。
+        // 不看 isAvailable()：这台 ROM 直接返回 false，但通信模式下该采集源仍可能可用。
+        var fullDuplex = false
+        var record: AudioRecord? = null
+        enterCallAudioMode()
+        record = openRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+        if (record != null && !probeHasAudio(record)) {
+            // 有的 ROM（实测 OPPO PLE110，MODE_NORMAL 下）对普通 App 关掉这个源，返回全 0。
+            record.release()
+            record = null
+            restoreAudioMode()
+        } else if (record != null) {
+            fullDuplex = true
+        }
+        if (record == null) {
+            record = openRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+        }
+        if (record == null) {
+            restoreAudioMode()
+            failStart(gen, "麦克风不可用，请检查权限")
+            return
+        }
+
+        activeRecord = record
+        if (fullDuplex) {
+            aec = createEffect(record.audioSessionId) { AcousticEchoCanceler.create(it)?.apply { enabled = true } }
+            suppressor = createEffect(record.audioSessionId) { NoiseSuppressor.create(it)?.apply { enabled = true } }
+        }
+
+        running = true
+        asrExecutor = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "call-asr").apply { isDaemon = true }
+        }
+        val thread = Thread({ captureLoop(gen, record, url, fullDuplex) }, "call-capture")
+            .apply { isDaemon = true }
+        worker = thread
+        thread.start()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openRecord(source: Int): AudioRecord? {
         val minBytes = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
@@ -107,40 +160,71 @@ class CallSpeechInput(
             .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
             .build()
-        val source = MediaRecorder.AudioSource.VOICE_RECOGNITION
-        val record = try {
+        val record = runCatching {
             AudioRecord.Builder()
                 .setAudioSource(source)
                 .setAudioFormat(format)
                 .setBufferSizeInBytes(maxOf(minBytes, FRAME_SAMPLES * 2 * 4))
                 .build()
-        } catch (e: Exception) {
-            failStart(gen, "麦克风不可用，请检查权限")
-            return
-        }
+        }.getOrNull() ?: return null
         if (record.state != AudioRecord.STATE_INITIALIZED) {
             record.release()
-            failStart(gen, "麦克风不可用（检查录音权限）")
-            return
+            return null
         }
+        return record
+    }
 
-        activeRecord = record
-        aec = createEffect(record.audioSessionId) { AcousticEchoCanceler.create(it)?.apply { enabled = true } }
-        suppressor = createEffect(record.audioSessionId) { NoiseSuppressor.create(it)?.apply { enabled = true } }
-
-        running = true
-        asrExecutor = Executors.newSingleThreadExecutor { r ->
-            Thread(r, "call-asr").apply { isDaemon = true }
+    /** 采 5 帧看看有没有真实采样：全 0 说明这个采集源在本机不可用。 */
+    @SuppressLint("MissingPermission")
+    private fun probeHasAudio(record: AudioRecord): Boolean {
+        val buf = ShortArray(FRAME_SAMPLES)
+        return try {
+            record.startRecording()
+            var heard = false
+            var frames = 0
+            while (frames < 5 && !heard) {
+                val n = record.read(buf, 0, buf.size)
+                if (n <= 0) break
+                for (i in 0 until n) {
+                    if (buf[i].toInt() != 0) {
+                        heard = true
+                        break
+                    }
+                }
+                frames++
+            }
+            heard
+        } catch (e: Exception) {
+            false
+        } finally {
+            runCatching { record.stop() }
         }
-        val thread = Thread({ captureLoop(gen, record, url) }, "call-capture").apply { isDaemon = true }
-        worker = thread
-        thread.start()
+    }
+
+    private fun enterCallAudioMode() {
+        if (callAudioMode) return
+        prevAudioMode = audioManager.mode
+        prevSpeakerOn = audioManager.isSpeakerphoneOn
+        runCatching {
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            audioManager.isSpeakerphoneOn = true
+        }
+        callAudioMode = true
+    }
+
+    private fun restoreAudioMode() {
+        if (!callAudioMode) return
+        runCatching {
+            audioManager.isSpeakerphoneOn = prevSpeakerOn
+            audioManager.mode = prevAudioMode
+        }
+        callAudioMode = false
     }
 
     private fun <T : AudioEffect> createEffect(sessionId: Int, factory: (Int) -> T?): T? =
         runCatching { factory(sessionId) }.getOrNull()
 
-    private fun captureLoop(gen: Int, record: AudioRecord, url: String) {
+    private fun captureLoop(gen: Int, record: AudioRecord, url: String, fullDuplex: Boolean) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
         val buf = ShortArray(FRAME_SAMPLES)
         val preRoll = ArrayDeque<ByteArray>()
@@ -153,6 +237,9 @@ class CallSpeechInput(
         var startedDuringPlayback = false
         var bargeIn = false
         var elapsedMs = 0f
+        var wasPlaying = false
+        var playStartMs = 0f
+        var echoPeak = 0f
         var noiseSum = 0f
         var noiseFrames = 0
         var noise = NOISE_FLOOR
@@ -197,10 +284,22 @@ class CallSpeechInput(
                     }
                 }
 
-                val threshold = if (isPlaying) {
-                    max(noise * NOISE_GAIN, PLAY_MIN_THRESHOLD)
-                } else {
-                    (noise * NOISE_GAIN).coerceIn(MIN_THRESHOLD, MAX_THRESHOLD)
+                // 朗读开始的头 300 ms 先把外放回声的峰值学下来，之后门限比它高一截；
+                // 有 AEC 时回声本来就被压掉了，这条只是兜底。
+                if (isPlaying && !wasPlaying) {
+                    playStartMs = elapsedMs
+                    echoPeak = 0f
+                } else if (!isPlaying && wasPlaying) {
+                    echoPeak = 0f
+                }
+                wasPlaying = isPlaying
+                val learningEcho = isPlaying && elapsedMs - playStartMs < ECHO_LEARN_MS
+                if (learningEcho) echoPeak = max(echoPeak, peak)
+
+                val threshold = when {
+                    learningEcho -> Float.MAX_VALUE
+                    isPlaying -> maxOf(noise * NOISE_GAIN, echoPeak * ECHO_GAIN, PLAY_MIN_THRESHOLD)
+                    else -> (noise * NOISE_GAIN).coerceIn(MIN_THRESHOLD, MAX_THRESHOLD)
                 }
                 val voiced = peak > threshold
 
@@ -229,7 +328,11 @@ class CallSpeechInput(
                     Vad.CANDIDATE -> {
                         if (voiced) {
                             candMs += frameMs
-                            val need = if (isPlaying) ONSET_PLAY_MS else ONSET_MS
+                            val need = when {
+                                !isPlaying -> ONSET_MS
+                                fullDuplex -> ONSET_PLAY_MS
+                                else -> ONSET_PLAY_NO_AEC_MS
+                            }
                             if (candMs >= need) {
                                 state = Vad.SPEECH
                                 speechMs = candMs
@@ -308,6 +411,7 @@ class CallSpeechInput(
         asrExecutor?.shutdownNow()
         asrExecutor = null
         releaseEffects()
+        restoreAudioMode()
     }
 
     override fun close() {

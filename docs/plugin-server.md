@@ -24,9 +24,9 @@
 | `/api/asr` | POST | body 为 s16le 16 kHz mono PCM 或同格式 WAV → `{ ok, text, ms }` |
 | `/api/tts` | GET/POST | `{ text }`（可选 `voice/rate/pitch/volume`）→ `audio/mpeg`，头 `x-tts-voice` / `x-tts-ms` / `x-tts-cache` |
 | `/api/tts/voices` | GET | 音色清单，`?locale=zh` 过滤，`&live=1` 拉在线全量 |
-| `/api/dsh-channel/state` | GET/POST | 角色、记忆条数、`tts` 配置；GET 本机额外返回 PIN |
-| `/dsh-channel/memory.log` | GET | 记忆原文（仅本机） |
-| `/dsh-channel/clients` | GET | 在线设备（仅本机，进程内统计） |
+| `/api/dsh-voice-channel/state` | GET/POST | 角色、记忆条数、`tts` 配置；GET 本机额外返回 PIN |
+| `/dsh-voice-channel/memory.log` | GET | 记忆原文（仅本机） |
+| `/dsh-voice-channel/clients` | GET | 在线设备（仅本机，进程内统计） |
 | `/admin` | GET | 桌面端设置页 |
 
 `/api/tts` 的错误码：`400` 文本为空、`401` 配对码不对、`413` 超过 2000 字、`503` 合成服务不可用（在线服务异常或未联网）。
@@ -90,9 +90,9 @@ node plugin/asr-server.mjs
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| 客户端「连接失败」 | 不在同一网段 / Windows 防火墙拦入站 | 放行 TCP 8787，或 `netsh advfirewall firewall add rule name="dsh-channel" dir=in action=allow protocol=TCP localport=8787`（管理员） |
+| 客户端「连接失败」 | 不在同一网段 / Windows 防火墙拦入站 | 放行 TCP 8787，或 `netsh advfirewall firewall add rule name="dsh-voice-channel" dir=in action=allow protocol=TCP localport=8787`（管理员） |
 | `401` | 配对码不匹配 | 管理页查看或重置配对码 |
-| `/api/tts` 返回 `503` | PC 未联网、Edge 服务异常、音色名非法 | 先试听；看 `plugin` 控制台 `[dsh-channel][tts]` 输出 |
+| `/api/tts` 返回 `503` | PC 未联网、Edge 服务异常、音色名非法 | 先试听；看 `plugin` 控制台 `[dsh-voice-channel][tts]` 输出 |
 | 有声但没声音 | 手机媒体音量 / 播放被打断 | 检查 `TtsOutput` 的 `generation` 打断逻辑，重发一轮 |
 | 语音识别慢/不准 | Vosk 小模型上限 | 换 `vosk-model-cn-0.22`（1.3 GB）或 SenseVoice，客户端零改动 |
 | 长回复合成慢 | 整段合成、无流式 | 待做：按句切分 + 边合成边下发 |

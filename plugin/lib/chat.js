@@ -2,10 +2,10 @@
 // 每次 /api/chat 动态 import，改本文件无需重载 Desktop 插件。
 import { readState, writeState, promptOf, contextOf, appendTurn } from './state.js'
 
-const SESSION_PREFIX = 'dsh-channel-'
-const WORKSPACE_TITLE = 'dsh-channel'
+const SESSION_PREFIX = 'dsh-voice-channel-'
+const WORKSPACE_TITLE = 'dsh-voice-channel'
 // 角色 / 记忆改由 system prompt 承载：只注册一个 section，不写进用户消息与会话历史。
-const SECTION_NAME = 'dsh-channel:context'
+const SECTION_NAME = 'dsh-voice-channel:context'
 const SECTION_ORDER = 20000
 // 改 section 闭包时递增：热加载会先 dispose 旧 section 再注册，不必重载 Desktop。
 const SECTION_VERSION = 1

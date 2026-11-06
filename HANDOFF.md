@@ -1,7 +1,7 @@
-# HANDOFF — dsh-channel 插件接入 DSH Desktop 会话
+# HANDOFF — dsh-voice-channel 插件接入 DSH Desktop 会话
 
 > 2026-11-07 收束版。新会话先读本文件末尾「2026-11-07 收尾」与「下一步」；「关键实证」里的 API 结论别重新调研。
-> 命名沿革：`dsh-esp32` → `dsh-bridge` → **`dsh-channel`**；目录 `server/` → `plugin/`。历史条目里的旧名按当前名理解。`plugin/data/state.json` 当前 `sessionId=dsh-channel-1793974315196`（已随改名更新，会话历史会重来）。
+> 命名沿革：`dsh-esp32` → `dsh-bridge` → `dsh-channel` → **`dsh-voice-channel`**（2026-11-07 远端仓库更名，插件 id / 路由前缀 / 侧边栏 label / localStorage 与 SharedPreferences 文件名同步改）；目录 `server/` → `plugin/`。**没动的**：Android 包名 `com.dsh.channel.whale`（改包名等于换应用，要卸载重装）、本地目录 `e:\File\Repo\dsh-android`。历史条目里的旧名按当前名理解。`plugin/data/state.json` 里仍是改名前的 `sessionId=dsh-channel-1793974315196`，属存量数据，未随字面改名处理（`package.json` 与 `cordis.patch.yml` 的 id 已变，重载插件后按新 id 注册）。
 > 用户偏好：中文、简洁专业、不科普；最简方案；无安装脚本（Desktop「添加插件」选本地目录）；不用 CLI 管 `desktop` profile；讨厌反复重启 Desktop；**只改字面名字时不要顺手处理存量数据**。
 
 ## 目标与环境
@@ -31,15 +31,15 @@
 | 文件 | 作用 |
 | --- | --- |
 | `plugin/package.json` | `engines.dsh`、`dsh.bundle.patch`、`dsh.client.platform=web`、无依赖 |
-| `plugin/cordis.patch.yml` | `- insert: [{id: dsh-channel, name: dsh-channel}]` |
+| `plugin/cordis.patch.yml` | `- insert: [{id: dsh-voice-channel, name: dsh-voice-channel}]` |
 | `plugin/public/index.html` | 演示页：麦克风、NDJSON 流式、`emotion→形象`、speechSynthesis、状态胶囊、持久化 `device-id` + PIN 输入 |
 | `plugin/public/admin.html` | 管理页：角色定义、`memory.log` 路径/内联查看、可改 PIN、已连接 client（5 s 刷新）；运行状态并入顶部描述行 |
 | `plugin/data/state.json` | `{persona, sessionId, pin}` |
 | `plugin/data/memory.log` | 长期记忆唯一存储源：JSONL `{time,role,text}`，**全量保留**，按会话载入最近 20 条快照（`INJECT_MEMORY=20`） |
 | `plugin/lib/state.js` | 状态读写、`validPin`/`randomPin`、`contextOf`（生成角色/记忆文本，供 system prompt 使用）、`promptOf`（仅降级时拼用户消息）、`appendTurn` |
 | `plugin/lib/index.js` | 8787 服务；`/api/health`、`/api/chat`（LAN 需 PIN、记录 client）、`detectEmotion`；`apply(ctx)` 注入服务 + 事件总线 + 同源路由；页面每次请求读文件 |
-| `plugin/lib/chat.js` | 专用会话：建/复用会话、`controller.prompt` 只发用户原文、事件/snapshot 取回复；`ensurePromptSection` 注册一次 system prompt section、`loadMemory` 维护会话级记忆快照；`ensureModel` 切账号路由、`ensureWorkspace` 挂 `dsh-channel` 工作区；每轮写回记忆 |
-| `plugin/lib/client.js` | Web 前端插件：侧边栏 `dsh-channel-charactor` + 双向箭头图标 + `main` 面板，iframe 指向同源 `/dsh-channel/admin` |
+| `plugin/lib/chat.js` | 专用会话：建/复用会话、`controller.prompt` 只发用户原文、事件/snapshot 取回复；`ensurePromptSection` 注册一次 system prompt section、`loadMemory` 维护会话级记忆快照；`ensureModel` 切账号路由、`ensureWorkspace` 挂 `dsh-voice-channel` 工作区；每轮写回记忆 |
+| `plugin/lib/client.js` | Web 前端插件：侧边栏 `dsh-voice-channel` + 双向箭头图标 + `main` 面板，iframe 指向同源 `/dsh-voice-channel/admin` |
 
 `health` 输出 `backend`、`lastError`、`sessionId`、`lastVia`、`probe`（服务方法名、`webPort`、`modelSelected`、`workspaceTitle`、`workspaceAttached`）。
 
@@ -56,7 +56,7 @@
 
 **Web 路由与前端**
 
-- `ctx.webServer.register({kind:'exact'|'prefix', path, handler})`，handler `(req,res)` 支持 async；`WebServer.match()` 先查 exact，再按 `pathname !== prefix && !pathname.startsWith(prefix + '/')` 最长前缀匹配 → **prefix 不能带尾斜杠**（`'/dsh-channel/'` 会要求 `'/dsh-channel//…'`），未命中走 SPA fallback（401/404）。route guard 由引擎统一处理。
+- `ctx.webServer.register({kind:'exact'|'prefix', path, handler})`，handler `(req,res)` 支持 async；`WebServer.match()` 先查 exact，再按 `pathname !== prefix && !pathname.startsWith(prefix + '/')` 最长前缀匹配 → **prefix 不能带尾斜杠**（`'/dsh-voice-channel/'` 会要求 `'/dsh-voice-channel//…'`），未命中走 SPA fallback（401/404）。route guard 由引擎统一处理。
 - 同源 iframe 不受 CSP 限制（WebUI 主页面无 `frame-src 'none'`）；`target="_blank"` 新窗口被 Electron 拦，页面内要用 fetch + 内联展示。
 - Web 前端最小范例：`package.json` 声明 `exports["./client"]` + `dsh.client.platform="web"`；`client.js` 用 `window.__ModuleLoader__.load({id,factory:(require)=>{...}})`、`module.exports.inject=['slots']`、`ctx.slots.inject('main',…)` + `register(...)`；组件用 `require('react')`。**SidebarIcon 只返回图标**，label 由宿主渲染（重复渲染会出现两遍文字）。
 - 已装 `dsh-mnemon` 0.5.38（分层记忆 + Memory System），本次未复用；两套记忆互不冲突。
@@ -65,10 +65,10 @@
 
 1. 不能直接读 `ctx.sessions`，用 `ctx.inject([...], cb)`；`controller.prompt` 漏 AbortSignal 会 `signal.throwIfAborted is not a function`。
 2. 「no reply」多为 `MISSING_CREDENTIAL`（模型路由没切），不是字段未知；`/api/health` 的 `lastError` 是历史值，成功请求不清除。
-3. prefix 尾斜杠导致 DSH 同源 `/dsh-channel/admin` 404 → iframe 白屏；已改 `path:'/dsh-channel'`，handler 对未识别路径回 404、iframe 加 `minHeight` 兜底。
+3. prefix 尾斜杠导致 DSH 同源 `/dsh-voice-channel/admin` 404 → iframe 白屏；已改 `path:'/dsh-voice-channel'`，handler 对未识别路径回 404、iframe 加 `minHeight` 兜底。
 4. 「打开日志」`<a target="_blank">` 点击无反应 → 按钮 `fetch` + `<pre>` 内联展开。
 5. 所有按钮提示串到「角色定义」右下角（只有一个 `#status`）→ 三个 `.status` + `setStatus(text,id)`；两个保存按钮改成只提交各自字段（曾因一起提交把 `persona` 清空，已恢复默认角色）。
-6. 工作区标题常量随改名变成 `dsh-channel`；**存量工作区 / 会话 ID 里的旧名不管**（实测 `~/.dsh/storages/workspace.json` 里标题已是 `dsh-channel`）。
+6. 工作区标题常量随改名变成 `dsh-voice-channel`；**存量工作区 / 会话 ID 里的旧名不管**（实测 `~/.dsh/storages/workspace.json` 里标题已是 `dsh-voice-channel`）。
 7. UI 迭代已落地：侧边栏双向箭头图标、client 表底部留白、演示页状态胶囊（中文标签 + 淡色竖线）、管理页运行状态并入描述行。
 8. T1 首版直接取 `ctx.systemPrompt` → 线上 `promptSection=fallback`（cordis 拒绝属性取服务）；改 `ctx.get('systemPrompt')` 后 `probe.promptSection=system`、错误清空。
 9. `chat.js` 虽每次请求动态 import，但已注册的 section 闭包不会自动替换；`SECTION_VERSION` 递增才会 dispose + 重注册，改 section 逻辑记得递增版本（当前线上进程由旧版注册、没存 disposer，递增前需重载一次插件，否则同名注册会冲突并降级为 `fallback`）。
@@ -81,7 +81,7 @@
 
 **功能已实现**：真实 DSH 会话回复（含重启复用）、角色定义与全量 `memory.log`、可改 PIN + LAN 认证、已连接 client 可视化、同源管理页/演示页、侧边栏入口、工作区归属、NDJSON 流式 + `emotion` 枚举；**T1 已落地**：角色/记忆走 `systemPrompt.section`，`controller.prompt()` 每轮只发用户原文，记忆按会话载入一次快照。
 
-**已验证**：4 个 JS `node --check` + lint 全过；独立进程断言覆盖新路由 200 / 旧路由 404、LAN 无 PIN 401 / 带 PIN 200、PIN 与记忆不泄露到 LAN、client 列表、全量日志写入（60 行）与注入 20 条、状态部分提交；T1 断言覆盖「section 只注册一次 / 每轮纯文本 / 其他会话不受影响 / 改角色下一轮生效 / 外部编辑才重载 / 热加载不重复注册 / 重启复用 sessionId / 新会话 / inject 路径 / 降级」。线上实测 `/dsh-channel/admin`、`/api/dsh-channel/state`、`/dsh-channel/clients`、`/dsh-channel/memory.log` 均 200，`workspaceTitle=dsh-channel`、`workspaceAttached=true`、`workspaceError` 空；T1 线上 `probe.promptSection=system`、`promptSectionError` 空、`memoryLoads=1`，会话事件最后一次 `agent/inbox/spliced` 不含 `[角色定义]` 前缀（此前三次均带）。
+**已验证**：4 个 JS `node --check` + lint 全过；独立进程断言覆盖新路由 200 / 旧路由 404、LAN 无 PIN 401 / 带 PIN 200、PIN 与记忆不泄露到 LAN、client 列表、全量日志写入（60 行）与注入 20 条、状态部分提交；T1 断言覆盖「section 只注册一次 / 每轮纯文本 / 其他会话不受影响 / 改角色下一轮生效 / 外部编辑才重载 / 热加载不重复注册 / 重启复用 sessionId / 新会话 / inject 路径 / 降级」。线上实测 `/dsh-voice-channel/admin`、`/api/dsh-voice-channel/state`、`/dsh-voice-channel/clients`、`/dsh-voice-channel/memory.log` 均 200，`workspaceTitle=dsh-voice-channel`、`workspaceAttached=true`、`workspaceError` 空；T1 线上 `probe.promptSection=system`、`promptSectionError` 空、`memoryLoads=1`，会话事件最后一次 `agent/inbox/spliced` 不含 `[角色定义]` 前缀（此前三次均带）。
 
 **注意**：`backend=dsh` 只在发消息后成立；`health.lastError` 不清除。T1 复测的三次请求均拿到 `{"type":"done","text":""}` 且 `turn/end.reason.kind=blocked`（模型侧未给回复，改造前同样 blocked，与本次改动无关）——「system prompt 实际进入模型请求、回复遵循角色/记得青柠」尚未端到端验收，模型链路恢复后补；别把历史 `lastError` 当当前故障。
 
@@ -127,7 +127,7 @@
 - 音色清单：默认 **89 ms 返回内置 8 条 zh-CN 表**（`source: builtin`）并后台拉在线全量，`&live=1` 才等全量（`zh` 前缀 14 条、全量 322 条，7–9 s，`source: live`），结果缓存 10 分钟。**别在页面加载路径上同步等全量**。
 - 演示页：`done` 后改调 `/api/tts` 播放 blob（失败自动回退 `speechSynthesis`）。音色下拉后来删了，改由管理页统一配置（见下条）。
 - **音色管理（服务端唯一出口）**：`state.json` 新增 `tts: {voice, rate, pitch}`（`DEFAULT_TTS` = Xiaoxiao / 0 / 0）；`lib/state.js` 的 `normalizeTts()` 做白名单与范围校验（voice `[A-Za-z0-9._-]{3,64}`、rate −50..100 %、pitch −50..50 Hz，非法回默认）；`lib/tts.js` 的 `ttsSettings()` 优先级 = `DSH_TTS_VOICE` 环境变量 > `state.tts` > 内置默认，`/api/tts` 请求不带参数时就落在这里，`/api/health` 的 `tts` 会回显当前值。
-- 管理页 `public/admin.html` 新增「语音音色」卡片：音色下拉（内置 8 条 / 「刷新在线音色」拉全量）、语速、音调、试听（POST `/api/tts` 播 blob）、保存（POST `/api/dsh-channel/state` 的 `tts` 字段）；`/api/dsh-channel/state` 的 GET 也返回 `tts`。管理页走同源本机，免 PIN。
+- 管理页 `public/admin.html` 新增「语音音色」卡片：音色下拉（内置 8 条 / 「刷新在线音色」拉全量）、语速、音调、试听（POST `/api/tts` 播 blob）、保存（POST `/api/dsh-voice-channel/state` 的 `tts` 字段）；`/api/dsh-voice-channel/state` 的 GET 也返回 `tts`。管理页走同源本机，免 PIN。
 - 实测：默认 Xiaoxiao/0/0 → 保存 Yunxi/+10%/−5Hz → 只发 `{"text"}` 的 `/api/tts` 返回 `x-tts-voice: zh-CN-YunxiNeural`；非法值 `{voice:'!!!bad',rate:999,pitch:-999}` 归一化为默认音色 / 100 / −50；`/api/health.tts` 同步反映。
 - `zh-CN` 音色 8 个：Xiaoxiao / Xiaoyi（女）、Yunjian / Yunxi / Yunxia / Yunyang（男）、liaoning-Xiaobei（东北）、shaanxi-Xiaoni（陕西）；性别与风格见 `GET /api/tts/voices`。
 - 实测（本机，PC 联网）：`import edge_tts` 0.43 s，首音频块 1.67 s，整句（约 5 s 音频）2.1 s；同文本第二次 33 ms（缓存命中，`x-tts-cache: hit`）；非法音色 `503 NoAudioReceived`（5 ms 快速失败），空文本 400，出错后 worker 仍可继续合成；LAN 无 PIN 401 / 带 `x-pin` 200。在线清单偶发一次失败，worker 对网络类异常自动重试一次（`NoAudioReceived` 不重试）。
@@ -192,9 +192,32 @@
 - **环境变更**：`archive/build-cache/sdk` 已不存在，本机 SDK 改到 `D:\Env\AndroidSDK`（只有 `platforms/android-35`），`compileSdk` 从 34 提到 **35**（`targetSdk` 仍 34）；`android/local.properties` 已写 `sdk.dir`（gitignore 内）。
 - **未闭环**：端到端「说话 → 字幕 → 朗读」与「朗读中插话 → 停声」都还没在真机验证（测试时用户无法出声）。同 WiFi 下手机 → PC 8787 本轮已通，不再是网络问题。
 
+## 形象包（2026-11-07，Android 0.8.0）
+
+主页形象从「一张 Canvas 鲸鱼」改成**可换的资源包**，素材按 emotion 播 gif。
+
+- 标准：`assets/packs/<id>/pack.json`，`states`（动画名→文件）、`emotions`（情绪→动画名）、`fallback`；省略 `states` 时按 `<动画名>.gif` 猜。加载器 `ui/AvatarPack.kt`，解析链「情绪 → 动画 → 文件 → fallback → 内置程序化鲸鱼」，任一环缺失都不白屏。
+- 渲染：`ui/WhaleAvatar.kt` 用系统 `ImageDecoder.decodeDrawable`（多帧 gif → `AnimatedImageDrawable`）+ `ImageView.FIT_CENTER`（不同素材画布尺寸不一致，不 Fit 会跳）。0.8.0 早期草稿试过 Coil，其解码器链只解出第一帧，弃用。
+- 管理：设置页「形象」列出扫到的所有包 + 「内置鲸鱼」，选择存 `SettingsStore.packId`（空串 = 内置）。
+- **踩坑**：`Box + Modifier.clickable` 放进 `Row(Modifier.horizontalScroll(...))` 里点击完全无响应（坐标正确、同面板的输入框可聚焦），换 `Surface(onClick)` + `FlowRow` 后正常。以后底部弹层里的可点小控件别用裸 `clickable` + 横向滚动容器。
+- 素材：`deepy` 包当时用两张参考图（`notification` / `sleeping`），按既有结论**只在本机用**，`.gitignore` 排除了 `assets/packs/**/*.gif|webp`，`pack.json` 仍入库（`license: local-only`）。⚠ 后来发现这两张图**只有 1 帧**，且素材已决定随仓库提交，见下节 0.9.0。
+- 版本 `0.8.0 / versionCode 8`，APK `26,427,140 B`（25.21 MiB），`adb install -r` 后冷启动正常，两包切换实测有效。
+
+## 形象动起来（2026-11-07，Android 0.9.0）
+
+用户反馈「UI 还是死的，和现在 app 的效果完全不一样」。三个原因叠在一起，逐条修：
+
+- **素材本身是单帧**：0.8.0 的 `notification.gif`（4.7 KB）/ `sleeping.gif`（4.3 KB）用 `ImageAnimator.CanAnimate` + 手写 GIF 字节解析双向验证都只有 **1 帧**（只含一个 delay=8 的 GCE），渲染层写得再对也只能定格。换成 `dsh-Go/docs/assets/pet-deepy-*zh-dark.gif` 的真动图：`notification` 32 帧 / `happy` 52 帧 / `sleeping` 64 帧 / `typing` 48 帧，336×352，单文件 67~116 KB。
+- **`AnimatedImageDrawable.start()` 在解码时无效**：`ImageDecoder.decodeDrawable` 已经返回 `AnimatedImageDrawable`（`repeatCount=-1`、`isRunning=true`），但此时还没挂到 ImageView、没有 callback，画面不动。改成 `setImageDrawable` 之后再 `start()` 一次才真正播。以后遇到「有图但不动」，先查这条。
+- **默认没选包**：`SettingsStore.packId` 默认空串 = 内置程序化鲸鱼，新装用户永远看不到包内形象。新增 `packChosen`（`prefs.contains("packId")`），没手动选过时默认用扫到的第一个包。
+- 渲染层顺手去掉 0.8.0 叠在 gif 上的呼吸缩放 / 上下浮动（多帧卡片会整张跟着抖），只留 180 ms 淡入；换情绪时保留上一张到新图解码完，避免闪空。
+- 校验方式：真机 PLE110 / Android 16 连续截图比对头像区域像素持续变化；帧数用 `System.Drawing` 与手写解析两条独立路径确认，别只信文件名或体积。
+- **素材改为随仓库提交**：`.gitignore` 去掉 `assets/packs/**/*.gif|webp` 排除，`pack.json` 的 `license` 改 `private-repo-only`；许可边界不变——素材仅限本机与私有仓库，不对外发布。
+- 版本 `0.9.0 / versionCode 9`，APK `26,851,993 B`（25.61 MiB）。
+
 ## 2026-11-07 收尾：新会话从这里开始
 
-**仓库**：`main` 只有一次提交 `64f8bc9 --story=初始化仓库`；当前 `M README.md`、`M android/README.md`，而 `plugin/`、`docs/`、`android/app/`、`android/gradle*`、`android/settings.gradle.kts`、`archive/`、`.gitignore`、`HANDOFF.md`、`TODO.md` 全部未跟踪 —— 即**阶段 1/2 的全部代码尚未进版本库**，首次完整提交是待办（提交前确认 `plugin/models`、`plugin/.venv`、`android/app/build` 被 `.gitignore` 挡住；`plugin/testdata/*.wav` 共 330 KB，作为 ASR 回归样本建议一并入库）。
+**仓库**：`main` 已包含阶段 1/2 全部代码、内置形象包素材与文档，最新一次提交即 0.9.0（android + 插件 + 文档，已推 `origin/main`）；`plugin/models`、`plugin/.venv`、`android/app/build`、`android/local.properties` 仍由 `.gitignore` 挡住，`plugin/testdata/*.wav` 作为 ASR 回归样本已入库。
 
 **运行态**（`127.0.0.1:8787`，Desktop 插件已加载含 `/api/asr` `/api/tts` 的新版 `index.js`）：`health.backend=dsh`；`asr.ready=true`（vosk / `vosk-model-small-cn-0.22` / loadMs 380）；`tts.ready=true`（edge-tts / `zh-CN-XiaoxiaoNeural` / rate 0 / pitch 0）。
 

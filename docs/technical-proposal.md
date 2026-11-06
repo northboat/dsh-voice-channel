@@ -25,7 +25,7 @@
 | `dsh-mobile-apk/` | 另一套 Termux 冻结快照宿主。第三方插件受构建期依赖闭包、peer 版本与平台链限制，运行时装插件可致 boot 硬崩（`scripts/check-mcp-client-deps.mjs:4-19`），不作为基础 |
 | `xiaozhi-esp32/` | 设备端协议参考：OTA 配置下发、WebSocket 二进制 Opus、设备侧 MCP Server、`llm.emotion` 均有源码与协议文档 |
 | `ESP32-S3-Touch-AMOLED-1.75C/` | 目标硬件。出厂 `firmware/*FactoryOnly*.bin` 为合并镜像、无源码；可修改的是 `examples/` 下的 ESP-IDF / Arduino 示例源码与板级 BSP |
-| 缺口 | 全仓无 `dsh-channel` 插件、无 ESP32↔DSH 桥接代码；`dsh-Go` 无设备配对 PIN、无 LAN 监听、无内置 TTS |
+| 缺口 | 全仓无 `dsh-voice-channel` 插件、无 ESP32↔DSH 桥接代码；`dsh-Go` 无设备配对 PIN、无 LAN 监听、无内置 TTS |
 
 **需求**
 
@@ -140,7 +140,7 @@ Client（三选一，协议相同）
   ▼  手机热点或同一 WiFi，纯 LAN
 Android（dsh-Go：PRoot + Ubuntu + Node + `dsh web`，回环 + token）
   ├─ DSH 本体：会话、工作区、模型、插件生态
-  └─ dsh-channel（Cordis/npm 插件，apply(ctx)，引擎进程内，唯一服务端）
+  └─ dsh-voice-channel（Cordis/npm 插件，apply(ctx)，引擎进程内，唯一服务端）
        ├─ client 无关 WS 服务：自监听 0.0.0.0:<port>，Bearer + Device-Id 白名单
        ├─ 语音桥：Opus ⇄ PCM ⇄ ASR/TTS
        ├─ 会话桥：session/prompt ⇄ session/event
@@ -230,8 +230,8 @@ Android（dsh-Go：PRoot + Ubuntu + Node + `dsh web`，回环 + token）
 # 1. 手机：安装官方 release APK，登录 DSH 账号（走账号余额；或自备模型 API Key）
 # 2. 手机：在 dsh-Go「终端」页放入插件并安装（装上即生效；改 lib/ 后在「引擎」页重启内核）
 mkdir -p /root/.dsh/dsh-go/plugins
-cp -r /sdcard/Download/dsh-channel /root/.dsh/dsh-go/plugins/
-dsh plugin --profile web add /root/.dsh/dsh-go/plugins/dsh-channel
+cp -r /sdcard/Download/dsh-voice-channel /root/.dsh/dsh-go/plugins/
+dsh plugin --profile web add /root/.dsh/dsh-go/plugins/dsh-voice-channel
 
 # 3. 阶段 1/2：PC dsh web 与 Android client 连同一插件实例，验证 client 无关协议
 # 4. 阶段 3：Waveshare 板从零实现固件（示例基线见 TODO.md），用 ESP-IDF 构建烧录
@@ -252,7 +252,7 @@ esptool.py --chip esp32s3 --port <PORT> write_flash 0x0 ESP32-S3-Touch-AMOLED-1.
 | 项 | 取值 |
 | --- | --- |
 | 宿主 | `dsh-Go` 官方 arm64 release APK，本机引擎（`web` profile） |
-| 插件 | `dsh-channel`，`engines.dsh` 与运行时版本一致 |
+| 插件 | `dsh-voice-channel`，`engines.dsh` 与运行时版本一致 |
 | client | 阶段 1：PC `dsh web` + 手机 APK；阶段 2：自写 Android APK；阶段 3：Waveshare 板（ESP-IDF v6.0.2 / v5.5.5） |
 | 网络 | 手机热点，设备与手机同网段，端口未被系统策略拦截 |
 | 凭据 | DSH 账号登录（或模型 API Key）；插件签发的设备 token |
@@ -374,7 +374,7 @@ esptool.py --chip esp32s3 --port <PORT> write_flash 0x0 ESP32-S3-Touch-AMOLED-1.
 | --- | --- | --- |
 | A 自研/参考安卓宿主 | 否决 | 生态断裂、魔改需重建快照与 APK（`archive/README.md:9`） |
 | B PC DSH + HTTP 远程 | 保留为联调/降级 | 工程量最小，但公网与便携代价违背 C2/C3 |
-| C `dsh-Go` + `dsh-channel` | 采用 | 现成 APK + 本地插件 + 纯 LAN，满足 C1–C7 |
+| C `dsh-Go` + `dsh-voice-channel` | 采用 | 现成 APK + 本地插件 + 纯 LAN，满足 C1–C7 |
 | 实施顺序 | 插件 → Android client → ESP32 固件 | `TODO.md` |
 | 情绪解耦 | server 返回枚举，client 映射本地 gif | `TODO.md`「情绪契约」、`xiaozhi-esp32/docs/websocket_zh.md:242` |
 | 固件基线 | Waveshare 板从零实现应用，复用示例驱动 | 出厂 bin 无源码（`firmware/README_ZH.md`） |

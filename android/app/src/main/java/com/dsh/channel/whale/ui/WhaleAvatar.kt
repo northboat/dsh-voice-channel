@@ -1,9 +1,14 @@
 package com.dsh.channel.whale.ui
 
-import android.content.Context
+import android.graphics.ImageDecoder
+import android.graphics.drawable.AnimatedImageDrawable
+import android.graphics.drawable.Animatable
+import android.graphics.drawable.Drawable
+import android.widget.ImageView
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -11,8 +16,12 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -20,57 +29,91 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
-import coil.compose.AsyncImage
-import coil.decode.ImageDecoderDecoder
-import coil.request.ImageRequest
+import androidx.compose.ui.viewinterop.AndroidView
 import com.dsh.channel.whale.Emotion
 import com.dsh.channel.whale.Phase
-import org.json.JSONObject
-
-private data class EmotionMap(
-    val dir: String,
-    val suffix: String,
-    val extension: String,
-    val emotions: Map<String, String>,
-)
-
-private fun loadEmotionMap(context: Context): EmotionMap = runCatching {
-    val text = context.assets.open("whale/emotion-map.json").bufferedReader().use { it.readText() }
-    val obj = JSONObject(text)
-    val emotions = obj.getJSONObject("emotions")
-    val map = emotions.keys().asSequence().associateWith { emotions.getString(it) }
-    EmotionMap(
-        dir = obj.optString("dir", "whale"),
-        suffix = obj.optString("suffix", "-zh-dark"),
-        extension = obj.optString("extension", ".gif"),
-        emotions = map,
-    )
-}.getOrDefault(EmotionMap("whale", "-zh-dark", ".gif", emptyMap()))
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
- * 优先播放 assets/whale 下按情绪映射的自建 gif（命名参考 dsh-Go 的 4 状态），
- * 资源缺失时回退到内置程序化鲸鱼动画，保证开箱即用且不分发外部美术素材。
+ * 当前形象包有该情绪的素材就播对应动画，否则回退内置程序化鲸鱼。
+ * 回退动画本身也按 emotion / phase 变，所以哪怕包是空的也不是一张死图。
  */
 @Composable
-fun WhaleAvatar(emotion: Emotion, phase: Phase, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    val map = remember { loadEmotionMap(context) }
-    val files = remember(map.dir) { context.assets.list(map.dir)?.toSet() ?: emptySet() }
-    val key = map.emotions[emotion.key] ?: "idle"
-    val fileName = "$key${map.suffix}${map.extension}"
-
-    if (files.contains(fileName)) {
-        val request = remember(fileName) {
-            ImageRequest.Builder(context)
-                .data("file:///android_asset/${map.dir}/$fileName")
-                .decoderFactory(ImageDecoderDecoder.Factory())
-                .crossfade(true)
-                .build()
-        }
-        AsyncImage(model = request, contentDescription = "鲸鱼表情：$key", modifier = modifier)
+fun WhaleAvatar(emotion: Emotion, phase: Phase, pack: AvatarPack?, modifier: Modifier = Modifier) {
+    val ref = remember(pack, emotion) { pack?.asset(emotion) }
+    if (ref != null) {
+        PackedAvatar(ref = ref, description = "形象：${emotion.key}", modifier = modifier)
     } else {
         ProgrammaticWhale(emotion = emotion, phase = phase, modifier = modifier)
+    }
+}
+
+/**
+ * 系统 ImageDecoder 直接解成 Drawable（多帧 gif → AnimatedImageDrawable），交给 ImageView 播。
+ *
+ * 这里不用 Coil：它的解码器链会先匹配到位图解码器，多帧 gif 只解出第一帧
+ * （实测拿到的是 BitmapDrawable），显式挂 decoderFactory 也没绕过去。
+ */
+@Composable
+private fun PackedAvatar(ref: AvatarRef, description: String, modifier: Modifier) {
+    val context = LocalContext.current
+    val drawable by produceState<Drawable?>(null, ref) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val source = when (ref) {
+                    is AvatarRef.Asset -> ImageDecoder.createSource(context.assets, ref.path)
+                    is AvatarRef.Local -> ImageDecoder.createSource(ref.file)
+                }
+                ImageDecoder.decodeDrawable(source).also { drawable ->
+                    // 素材的 NETSCAPE 循环次数可能是 1，不强制无限循环就只播一遍然后定格。
+                    if (drawable is AnimatedImageDrawable) {
+                        drawable.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+                    }
+                }
+            }.getOrNull()
+        }
+        // 静态图也能跑这个调用，AnimatedImageDrawable 才会真的开始播放。
+        (value as? Animatable)?.start()
+    }
+
+    // 换情绪时新素材要解码几十毫秒，这期间先留着上一张，否则画面会闪空。
+    val shown = remember { mutableStateOf<Drawable?>(null) }
+    LaunchedEffect(drawable) {
+        if (drawable != null) {
+            (shown.value as? Animatable)?.takeIf { it.isRunning }?.stop()
+            shown.value = drawable
+        }
+    }
+
+    val loaded = shown.value
+    if (loaded != null) {
+        // 素材本身是多帧 gif，不再叠缩放/位移，否则整张卡片会跟着抖；只做切换淡入。
+        var visible by remember(loaded) { mutableStateOf(false) }
+        LaunchedEffect(loaded) { visible = true }
+        val fade by animateFloatAsState(
+            targetValue = if (visible) 1f else 0f,
+            animationSpec = tween(180),
+            label = "fade",
+        )
+        AndroidView(
+            factory = { ctx ->
+                ImageView(ctx).apply {
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    contentDescription = description
+                }
+            },
+            update = { view ->
+                if (view.drawable !== loaded) {
+                    view.setImageDrawable(loaded)
+                    // 解码时还没有 callback，start() 不会真的跑；挂到 ImageView 后再启一次。
+                    (loaded as? Animatable)?.start()
+                }
+            },
+            modifier = modifier.graphicsLayer { alpha = fade },
+        )
     }
 }
 

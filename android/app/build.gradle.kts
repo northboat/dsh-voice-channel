@@ -12,8 +12,8 @@ android {
         applicationId = "com.dsh.channel.whale"
         minSdk = 28
         targetSdk = 34
-        versionCode = 7
-        versionName = "0.7.0"
+        versionCode = 9
+        versionName = "0.9.0"
     }
 
     buildTypes {

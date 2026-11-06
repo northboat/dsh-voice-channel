@@ -58,7 +58,7 @@
 - `android/` 0.3.0 已落地（Kotlin + Jetpack Compose，minSdk 28）：鲸鱼主屏（无输入框、纯语音、小字字幕、情绪动画）、角落设置弹窗（局域网扫描连接 + PIN）、音色切换与音色包下载管理。
 - **语音输入改为瘦客户端（ASR 在插件端）**：0.2.0 曾在 APK 内置 Vosk（42 MB 模型 + 19 MB so → 116 MiB），且本 App 本来就必须连插件，离线识别价值残缺。参照 `xiaozhi-esp32`（设备只做 AFE/VAD + 编解码 + 播放）改为：手机 `AudioRecord` 16 kHz + 能量 VAD 700 ms 断句 → 整段 PCM `POST /api/asr` → PC 侧 Python `vosk` 0.3.45 + `vosk-model-small-cn-0.22`（Apache-2.0）解码。模型只在 PC（`plugin/models` + `plugin/.venv` 已 gitignore），客户端可随时换大模型而零改动；当时输出仍走系统 TTS（0.4.0 起改为插件端合成，见下）。
 - 插件新增 `/api/asr`（`lib/asr.js` + `lib/asr_worker.py` + `lib/asr_http.js`）：模型加载一次（约 580 ms），recognizer 复用 + 启动预热，1 s 音频 67 ms、5 s 224 ms；另有独立服务 `asr-server.mjs`（8788）仅供本机调试。**注意**：`/api/asr` 在 `index.js` 里，需重载一次插件才生效。
-- 插件零改动（chat 侧）：`/api/health` 发现 + `/api/chat` NDJSON + PIN 全部沿用；情绪 gif 只参考 `dsh-Go/docs/assets` 的 4 状态命名，素材按 `ASSETS.md:3,19` 不复制、不分发。
+- 插件零改动（chat 侧）：`/api/health` 发现 + `/api/chat` NDJSON + PIN 全部沿用；情绪 gif 只参考 `dsh-Go/docs/assets` 的 4 状态命名，素材当时按 `ASSETS.md:3,19` 不复制、不分发（0.9.0 起改为随私有仓库提交，仅本机 / 私有仓库使用）。
 - **`:app:assembleDebug` 已成功**：`app-debug.apk` **26,535,693 B（25.31 MiB）**，161 条目，`com.dsh.channel.whale / 0.3.0 / minSdk 28 / targetSdk 34`，v2 验签通过；dex 24.6 MiB，无 native 库、无模型（去掉 `material-icons-extended` 34 MB，`Mic` 改 Canvas 自绘）。
 - 验证：`adb install -r` 后 `versionCode=3`，冷启动无崩溃，设置页显示「识别状态：插件端识别 /api/asr（本机不加载模型）」；PC 侧用 SAPI 合成「你好，今天天气怎么样」→ 识别 `你好今天天气怎么样`。**真机语音闭环待测**：测试时手机 WiFi 关闭、USB 共享网段被防火墙挡、`adb reverse` 在该 ROM 不转发。构建、命令与实测细节见 `android/README.md`。
 
@@ -71,11 +71,13 @@
 - **构建**：`:app:assembleDebug` 成功，`26,434,679 B`（**25.21 MiB**）/ 161 条目 / `versionCode=4` / `0.4.0`；`adb install -r` 通过，冷启动无崩溃，设置页只剩 4 个服务端音色预设。
 - **待测**：手机 → PC 的 8787 仍被 Windows 防火墙拦（`ping` 与 TCP 均不通；手机 `rndis0` 10.86.196.160/24 与 PC 同段），所以录音 → ASR → 合成 → 播放的闭环要放行入站或换同 WiFi 后再测；PC 侧已用 App 同参数（`voice` + 整数 `rate`/`pitch`）验证 `/api/tts` 返回 `audio/mpeg`。
 - **0.5.0：client 不再发音色参数**。音频消费方是模型 / 下游分析而非挑音色的人耳，故 `{"text"}` 之外全砍：删 `VoicePacks.kt`、`assets/voices/voice-packs.json`、`SettingsStore.voicePackId`、设置页音色与音色包区块、唤醒音效；音色只在服务端由 `DSH_TTS_VOICE` 定（默认 `zh-CN-XiaoxiaoNeural`）。APK `26,385,163 B`（25.16 MiB）/ 159 条目 / `versionCode=5` / `0.5.0`，装包后设置页只剩「语音能力 + 局域网插件」。
-- **音色管理补齐（服务端）**：`state.json` 新增 `tts {voice, rate, pitch}`（`lib/state.js` 校验归一化），`lib/tts.js` 的 `ttsSettings()` 按「环境变量 > state > 默认」取值，`/api/tts` 不带参数时用它；管理页 `/admin` 新增「语音音色」卡片（下拉 + 刷新在线音色 + 语速/音调 + 试听 + 保存），`/api/dsh-channel/state` GET/POST 带上 `tts`；演示页的音色下拉删除，只发文本。实测保存 Yunxi/+10%/−5Hz 后 `/api/tts` 返回 `x-tts-voice: zh-CN-YunxiNeural`，非法值自动归一化。
+- **音色管理补齐（服务端）**：`state.json` 新增 `tts {voice, rate, pitch}`（`lib/state.js` 校验归一化），`lib/tts.js` 的 `ttsSettings()` 按「环境变量 > state > 默认」取值，`/api/tts` 不带参数时用它；管理页 `/admin` 新增「语音音色」卡片（下拉 + 刷新在线音色 + 语速/音调 + 试听 + 保存），`/api/dsh-voice-channel/state` GET/POST 带上 `tts`；演示页的音色下拉删除，只发文本。实测保存 Yunxi/+10%/−5Hz 后 `/api/tts` 返回 `x-tts-voice: zh-CN-YunxiNeural`，非法值自动归一化。
 - **UI 产品化（0.6.0）**：App 设置页删掉全部技术说明与「语音能力」节，只剩地址 / 配对码 / 搜索 / 连接状态；`connected`（填过地址）改为 `reachable`（健康检查通过才亮）；错误提示全部人话。管理页改标题「小鲸鱼」、长句收进折叠「运行状态」、卡片与 hint 精简；演示页显示中文心情与简单状态。技术细节迁入新建的 `docs/app-client.md` 与 `docs/plugin-server.md`。APK `26,385,163 B`（25.16 MiB）/ `versionCode=6` / `0.6.0`，装包截图确认。
 - **ASR 中英混输不可用（2026-11-07 实测，样本见 `plugin/testdata/`）**：纯中文句 `帮我把这个文件打开，然后查一下镜像` 全对（328 ms）；混说句 `帮我把 VS Code 打开，然后 search 一下 Docker 镜像` 识别成 `帮我把悲哀扣打开然后事儿一下着可是景象`（2001 ms）——`vosk-model-small-cn-0.22` 只会按中文谐音硬转英文词。可选：换 `vosk-model-cn-0.22`（1.3 GB）/ 换 SenseVoice-Small（需新依赖）/ 保留小模型 + 词典纠错；`/api/asr` 换 worker 即可，client 零改动。**真机语音闭环仍待测**（手机与 PC 未同网、8787 入站被拦）。
 - **通话模式（0.7.0，常驻监听 + 插话打断）**：`voice/RemoteSpeechInput.kt` → `voice/CallSpeechInput.kt`，一个 `AudioRecord` 常驻到挂断，capture 线程按句切分、单线程池跑 `/api/asr`（识别不再挡住继续听）；新增 `SpeechStarted` 事件驱动打断——朗读中停 `MediaPlayer`、思考中撤 `chatJob`，随后这句话当新输入。防自打断三层：`VOICE_COMMUNICATION`+AEC（理想）/ 朗读期阈值抬到 `max(噪声峰值×3.5, 700)` 且连续 320 ms / 朗读期起步却没被判为人声的片段直接丢弃。**实测**：该 ROM 的 `VOICE_COMMUNICATION` 返回全 0 采样，只能用 `VOICE_RECOGNITION`，平台 AEC 拿不到；VAD 首发沿用「RMS > 350」导致完全没反应（说话峰值仅 220），改帧内峰值 + 噪声底最小值标定后阈值收敛到 ~216。APK `26,441,113 B`（25.22 MiB）/ `versionCode=7` / `0.7.0`，`compileSdk` 随本机 SDK 变更提到 35。**真机通话闭环与打断验收待测**。
-- **仓库尚未首次提交**：`main` 只有 `64f8bc9 --story=初始化仓库`，`plugin/`、`docs/`、`android/app/` 等仍为未跟踪状态。
+- **形象包（0.8.0）**：主页形象改成 `assets/packs/<id>/pack.json` 资源包（`states` + `emotions` + `fallback`），按 emotion 播 gif，缺素材回退内置程序化鲸鱼；设置页「形象」可切换，选择存 `SettingsStore.packId`。首包 `deepy` 用两张参考图（`notification` / `sleeping`），按既有许可结论只在本机用、gif 已 gitignore，`pack.json` 入库。踩坑：`Box + clickable` 在 `horizontalScroll` 里点不动，换 `Surface(onClick)` + `FlowRow`。APK `26,427,140 B`（25.21 MiB）/ `versionCode=8`。
+- **形象动起来（0.9.0）**：主页形象从「静图 + 呼吸缩放」改成真·多帧动画。三处根因：① 0.8.0 的两个 gif 只有 1 帧（`ImageAnimator` + 手写解析双验），换成 `dsh-Go/docs/assets` 的 deepy 四状态动图（32/52/64/48 帧，336×352）；② `AnimatedImageDrawable` 在解码阶段 `start()` 无效（还没挂到 ImageView、无 callback），改为 `setImageDrawable` 后再 `start()`；③ `packId` 默认空串导致新装用户一直看内置鲸鱼，新增 `packChosen` 默认选第一个包。渲染层去掉与帧动画打架的缩放/浮动，只留 180 ms 淡入。素材改为随仓库提交（`.gitignore` 放开 `assets/packs/**/*.gif`），许可仍是私有仓库内使用。真机连续截图确认动画在跑。APK `26,851,993 B`（25.61 MiB）/ `versionCode=9` / `0.9.0`。
+- **仓库已推送**：`main` 现包含 `plugin/`、`docs/`、`android/app/` 与内置形象包素材，本轮提交把 android 0.9.0、插件改动与文档一并推到 `origin/main`（此前只有 `64f8bc9 --story=初始化仓库` 与一次文档提交）。
 
 ## 预留任务 T1：prompt / 角色定义注入优化（省 token）
 
@@ -87,7 +89,7 @@
 
 **落地方案**（只改 `plugin/lib/chat.js` + `public/admin.html`，热生效、无需重载 Desktop；细节见 `HANDOFF.md`「关键实证」）：
 
-1. `ensurePromptSection()` 用 `ctx.get('systemPrompt').section(...)` **注册一次** `dsh-channel:context`：角色定义每次组装动态读 `state.json`（改角色下一轮生效）；`text` 按 `assembly.agent.id` 只对专用会话返回内容，其他会话为空；`interpolate:false` 防记忆里的 `{{…}}` 被当变量解析。拿不到服务时用 `ctx.inject(['systemPrompt'], …)` 兜底，仍失败才退回 `promptOf()` 旧行为。
+1. `ensurePromptSection()` 用 `ctx.get('systemPrompt').section(...)` **注册一次** `dsh-voice-channel:context`：角色定义每次组装动态读 `state.json`（改角色下一轮生效）；`text` 按 `assembly.agent.id` 只对专用会话返回内容，其他会话为空；`interpolate:false` 防记忆里的 `{{…}}` 被当变量解析。拿不到服务时用 `ctx.inject(['systemPrompt'], …)` 兜底，仍失败才退回 `promptOf()` 旧行为。
 2. `loadMemory()` 把最近 20 条记忆做成**会话级快照**：本进程每轮 `appendTurn` 追加的两条已在会话历史里、不算变化；只有外部编辑 `memory.log` / 新会话 / 重启才重新载入，保证 system prompt 稳定、前缀缓存可复用。
 3. `controller.prompt()` 只发用户原文；`SECTION_VERSION` 递增才 dispose + 重注册 section（热加载替换闭包）。`/api/health` 的 `probe.promptSection` / `memoryLoads` 可直接观测。
 

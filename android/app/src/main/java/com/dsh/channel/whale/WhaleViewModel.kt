@@ -1,20 +1,25 @@
 package com.dsh.channel.whale
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.dsh.channel.whale.net.LanDiscovery
 import com.dsh.channel.whale.net.PluginClient
 import com.dsh.channel.whale.net.SettingsStore
+import com.dsh.channel.whale.ui.AvatarPack
+import com.dsh.channel.whale.ui.AvatarPacks
 import com.dsh.channel.whale.voice.CallSpeechInput
 import com.dsh.channel.whale.voice.SpeechInput
 import com.dsh.channel.whale.voice.TtsOutput
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class Emotion(val key: String) {
     NEUTRAL("neutral"),
@@ -48,6 +53,10 @@ data class UiState(
     val found: List<LanDiscovery.Found> = emptyList(),
     val scanning: Boolean = false,
     val message: String? = null,
+    /** assets/packs 里扫到的形象包。 */
+    val packs: List<AvatarPack> = emptyList(),
+    /** 当前形象包 id；空 = 内置程序化鲸鱼。 */
+    val packId: String = "",
 )
 
 /**
@@ -85,11 +94,69 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
     ) { event -> onSpeechEvent(event) }
 
     init {
+        val packs = AvatarPacks.load(getApplication())
+        // 没选过形象时直接用扫到的第一个包：装机后默认就该是包里的动态形象，
+        // 否则新用户看到的永远是内置 Canvas 鲸鱼，和形象包没关系。
+        val packId = if (store.packChosen) store.packId else packs.firstOrNull()?.id.orEmpty()
         _ui.update {
             it.copy(
                 endpointInput = store.endpoint,
                 pinInput = store.pin,
+                packId = packId,
+                packs = packs,
             )
+        }
+    }
+
+    /** 切换形象包；空字符串回到内置程序化鲸鱼。 */
+    fun selectPack(id: String) {
+        store.packId = id
+        _ui.update { it.copy(packId = id) }
+    }
+
+    /** 导入 zip 形象包：校验 pack.json → 落到 filesDir/packs/<id> → 立即切过去。 */
+    fun importPack(uri: Uri) {
+        viewModelScope.launch {
+            _ui.update { it.copy(message = "正在导入…") }
+            val result = runCatching {
+                withContext(Dispatchers.IO) { AvatarPacks.importZip(getApplication(), uri) }
+            }
+            result.fold(
+                onSuccess = { pack ->
+                    val packs = AvatarPacks.load(getApplication())
+                    store.packId = pack.id
+                    _ui.update {
+                        it.copy(packs = packs, packId = pack.id, message = "已导入「${pack.name}」")
+                    }
+                },
+                onFailure = { error ->
+                    _ui.update { it.copy(message = error.message ?: "导入失败") }
+                },
+            )
+        }
+    }
+
+    /** 删除导入的形象包；正在用时回退到内置鲸鱼。 */
+    fun deletePack(id: String) {
+        val pack = _ui.value.packs.firstOrNull { it.id == id } ?: return
+        if (!pack.imported) {
+            _ui.update { it.copy(message = "内置形象不能删除") }
+            return
+        }
+        viewModelScope.launch {
+            val removed = runCatching {
+                withContext(Dispatchers.IO) { AvatarPacks.delete(pack) }
+            }.getOrDefault(false)
+            if (!removed) {
+                _ui.update { it.copy(message = "删除失败") }
+                return@launch
+            }
+            val packs = AvatarPacks.load(getApplication())
+            val nextId = if (_ui.value.packId == id) AvatarPacks.BUILT_IN else _ui.value.packId
+            store.packId = nextId
+            _ui.update {
+                it.copy(packs = packs, packId = nextId, message = "已删除「${pack.name}」")
+            }
         }
     }
 

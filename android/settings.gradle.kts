@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "dsh-channel-whale"
+rootProject.name = "dsh-voice-channel"
 include(":app")

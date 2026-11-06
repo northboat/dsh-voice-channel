@@ -90,13 +90,13 @@ const LABELS = {
 }
 const $ = (id) => document.getElementById(id)
 const face = $('face'), emotionEl = $('emotion'), reply = $('reply'), input = $('text'), pinInput = $('pin')
-let sessionId = localStorage.getItem('dsh-channel-device-id')
+let sessionId = localStorage.getItem('dsh-voice-channel-device-id')
 if (!sessionId) {
   sessionId = 'web-' + Math.random().toString(36).slice(2, 8)
-  localStorage.setItem('dsh-channel-device-id', sessionId)
+  localStorage.setItem('dsh-voice-channel-device-id', sessionId)
 }
-pinInput.value = localStorage.getItem('dsh-channel-pin') ?? ''
-pinInput.oninput = () => localStorage.setItem('dsh-channel-pin', pinInput.value.trim())
+pinInput.value = localStorage.getItem('dsh-voice-channel-pin') ?? ''
+pinInput.oninput = () => localStorage.setItem('dsh-voice-channel-pin', pinInput.value.trim())
 let speaking = false
 
 function setEmotion(value) {

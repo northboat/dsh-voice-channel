@@ -12,6 +12,7 @@
          故不需要 queries 声明包可见性。 -->
 
     <application
+        android:name=".WhaleApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"

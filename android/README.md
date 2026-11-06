@@ -1,10 +1,10 @@
-# dsh-channel-whale（Android client）开发记录
+# dsh-voice-channel（Android client）开发记录
 
 阶段 2 的 Android client：点进去只有一只鲸鱼、没有输入框，纯语音与局域网插件对话。
 
-当前版本 **0.7.0**（`versionCode 7`）。架构：**手机只做「常驻录音 + 断句 + 播放」**，ASR 与 TTS 都在插件端；client 只发文本，音色 / 语速由服务端固定，本机既不初始化系统 TTS，也不带任何音色配置。APK **25.22 MiB**。
+当前版本 **0.9.0**（`versionCode 9`）。架构：**手机只做「常驻录音 + 断句 + 播放」**，ASR 与 TTS 都在插件端；client 只发文本，音色 / 语速由服务端固定，本机既不初始化系统 TTS，也不带任何音色配置。APK **25.61 MiB**。
 
-0.6.0 之前是「点一下说一句」的对讲机形态；0.7.0 改为**通话模式**：点一下进入通话后麦克风常驻打开，说完自动回到听，鲸鱼朗读时**直接开口就能打断**，不需要任何按钮。界面文案在 0.6.0 收敛过一次（设置页只留「地址 + 配对码 + 连接状态」），技术细节在 [`docs/app-client.md`](../docs/app-client.md)。
+0.6.0 之前是「点一下说一句」的对讲机形态；0.7.0 改为**通话模式**：点一下进入通话后麦克风常驻打开，说完自动回到听，鲸鱼朗读时**直接开口就能打断**，不需要任何按钮。0.8.0 主页形象改成**可换的资源包**，按 emotion 播放 gif；0.9.0 修好「素材其实只有 1 帧 + `start()` 时机不对」导致形象不动的问题，内置 deepy 四状态多帧动画并随仓库提交。界面文案在 0.6.0 收敛过一次（设置页只留「地址 + 配对码 + 连接状态」），技术细节在 [`docs/app-client.md`](../docs/app-client.md)。
 
 本文记录设计取舍、可复现命令和实现细节。整体路线见根目录 `TODO.md` / `HANDOFF.md`，插件侧见 `plugin/`。
 
@@ -164,7 +164,7 @@ dex 的 30 MiB 降幅来自两点：去掉 `material-icons-extended`（AAR 34.1 
 | Gradle | 8.11.1（`C:\Users\northboat\.gradle\wrapper\dists\gradle-8.11.1-bin\bpt9gzteqjrbo1mjrsomdt32c\gradle-8.11.1\bin\gradle.bat`） |
 | AGP / Kotlin | 8.8.2 / 2.0.21 |
 | Android SDK | `D:\Env\AndroidSDK`（`platforms/android-35`、`build-tools/35.0.0`）。原 `archive/build-cache/sdk` 已不存在，`compileSdk` 随之从 34 提到 **35**（`targetSdk` 仍 34） |
-| adb | `C:\Users\northboat\Downloads\platform-tools\adb.exe` |
+| adb | `D:\Env\AndroidSDK\platform-tools`，已加入用户 PATH，直接 `adb` 即可 |
 | Node | v22.23.2（插件运行时） |
 | Python | 3.12.14（`plugin/.venv` 由它创建） |
 | 真机 | OPPO PLE110 / Android 16，`3B659P001H900000` |
@@ -213,10 +213,9 @@ $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 Set-Location 'e:\File\Repo\dsh-android\android'
 & 'C:\Users\northboat\.gradle\wrapper\dists\gradle-8.11.1-bin\bpt9gzteqjrbo1mjrsomdt32c\gradle-8.11.1\bin\gradle.bat' :app:assembleDebug --no-daemon
 
-$adb = 'C:\Users\northboat\Downloads\platform-tools\adb.exe'
 $apk = 'e:\File\Repo\dsh-android\android\app\build\outputs\apk\debug\app-debug.apk'
-& $adb install -r $apk
-& $adb shell dumpsys package com.dsh.channel.whale | Select-String 'versionCode|versionName'
+adb install -r $apk
+adb shell dumpsys package com.dsh.channel.whale | Select-String 'versionCode|versionName'
 ```
 
 体积核对：
@@ -266,19 +265,19 @@ Invoke-WebRequest -Uri 'http://127.0.0.1:8787/api/asr' -Method Post `
 ### 2.6 真机诊断
 
 ```powershell
-& $adb shell am force-stop com.dsh.channel.whale
-& $adb shell am start -n com.dsh.channel.whale/.MainActivity
-& $adb logcat -d -v brief | Select-String 'AndroidRuntime|FATAL'
-& $adb shell run-as com.dsh.channel.whale cat shared_prefs/dsh-whale.xml   # 看 endpoint / pin
-& $adb shell uiautomator dump /sdcard/u.xml; & $adb shell cat /sdcard/u.xml
-& $adb shell screencap -p /sdcard/s.png; & $adb pull /sdcard/s.png "$env:TEMP\s.png"
+adb shell am force-stop com.dsh.channel.whale
+adb shell am start -n com.dsh.channel.whale/.MainActivity
+adb logcat -d -v brief | Select-String 'AndroidRuntime|FATAL'
+adb shell run-as com.dsh.channel.whale cat shared_prefs/dsh-voice-channel.xml   # 看 endpoint / pin
+adb shell uiautomator dump /sdcard/u.xml; adb shell cat /sdcard/u.xml
+adb shell screencap -p /sdcard/s.png; adb pull /sdcard/s.png "$env:TEMP\s.png"
 ```
 
 网络排查（重要）：
 
 ```powershell
-& $adb shell ip -o addr | Select-String 'inet '            # 手机有没有 wlan0
-& $adb shell 'toybox nc -w 4 10.181.97.185 8787 </dev/null; echo rc=$?'
+adb shell ip -o addr | Select-String 'inet '            # 手机有没有 wlan0
+adb shell 'toybox nc -w 4 10.181.97.185 8787 </dev/null; echo rc=$?'
 ```
 
 - 手机**必须和 PC 在同一网段**（实测中手机曾关闭 WiFi、只走蜂窝 + USB 共享，连 8787 都不通）。
@@ -317,7 +316,8 @@ Get-FileHash $dst -Algorithm SHA256   # 3AF8B0E7…B14BA
 | `net/SettingsStore.kt` | SharedPreferences：endpoint / pin / 稳定 `device-id` |
 | `ui/WhaleScreen.kt` | 主屏；`MicGlyph` 用 Canvas 自绘，避免扩展图标库 |
 | `ui/SettingsSheet.kt` | 设置弹窗：地址 / 配对码 / 搜索 / 连接状态（不写技术说明） |
-| `ui/WhaleAvatar.kt` | `emotion-map.json` → gif；缺失回退程序化鲸鱼 |
+| `ui/AvatarPack.kt` | 形象包扫描与解析（`assets/packs/<id>/pack.json`） |
+| `ui/WhaleAvatar.kt` | 按情绪取包内动画，缺失回退程序化鲸鱼 |
 
 插件侧新增：
 
@@ -496,9 +496,45 @@ device-id: <SharedPreferences 里的稳定 UUID>
 
 ### 3.10 情绪资源（合规）
 
-`assets/whale/emotion-map.json` 定义 `dir / suffix / extension` 与 8 个 `emotion → 动画 key`。把自建 gif 按 `<key>-zh-dark.gif` 放进 `assets/whale/` 即可播放；缺失时回退 `ProgrammaticWhale` 的 Canvas 鲸鱼。
+形象改成**资源包**：一个目录一个包，`assets/packs/<id>/pack.json` 声明映射，同目录放动画文件（gif / webp，用系统 `ImageDecoder` 解码，多帧 gif 得到 `AnimatedImageDrawable`）。
 
-**不复制、不分发 dsh-Go 的美术素材**：`dsh-Go/ASSETS.md:3,19` 明确这些素材仅限其仓库构建 / 测试 / 展示。
+```json
+{
+  "schema": 1,
+  "id": "deepy",
+  "name": "Deepy",                  // 设置页显示名
+  "states": {                       // 动画名 → 文件
+    "idle": "notification.gif",
+    "notification": "notification.gif",
+    "happy": "happy.gif",
+    "sleeping": "sleeping.gif",
+    "typing": "typing.gif"
+  },
+  "emotions": {                     // 情绪 → 动画
+    "neutral": "idle",
+    "happy": "happy",
+    "thinking": "typing",
+    "sleepy": "sleeping"
+  },
+  "fallback": "idle"                // 该情绪没素材时退到哪个动画
+}
+```
+
+- `states` 是「动画名 → 文件名」，省略则按 `<动画名>.gif` 猜；
+- `emotions` 是「情绪 key → 动画名」，情绪枚举见 `Emotion`（neutral / happy / sad / angry / surprised / thinking / sleepy / error）；
+- 解析链：情绪 → 动画 → 文件 → 包内 `fallback` → **内置程序化鲸鱼**。任何一环缺失都不会白屏。
+- 设置页「形象」里列出 `packs/` 下扫到的所有包 + 内置鲸鱼，选择存 `SettingsStore.packId`；`packChosen` 为 false（从没手动选过）时默认用扫到的第一个包。
+
+**多帧 gif 的播放**（`ui/WhaleAvatar.kt`）：
+
+- `ImageDecoder.decodeDrawable` → `AnimatedImageDrawable`，`repeatCount` 强制 `REPEAT_INFINITE`（素材的 NETSCAPE 循环次数可能是 1）；
+- **`start()` 必须放在 `setImageDrawable` 之后**：解码线程里调用时还没有 view callback，`isRunning` 会是 true 但画面不动，表现为「有图但静止」；
+- 不用 Coil：它的解码器链先命中位图解码器，多帧 gif 只解出第一帧（显式挂 `decoderFactory` 也没绕过去）；
+- 多帧素材不要再叠缩放 / 位移动画，否则整张卡片跟着抖；换情绪时保留上一张直到新图解码完，避免闪空。
+
+之所以废除旧的 `<key>-zh-dark.gif` 命名约定：不同素材的帧率、画布尺寸、留白都不一样，硬编码后缀没法适配，交给打包者在 `pack.json` 里声明最省事。
+
+**素材许可**：`dsh-Go/ASSETS.md:3,19` 明确美术素材不在 AGPL-3.0 范围内，仅限其仓库构建 / 测试 / 展示。本仓库的 `assets/packs/deepy/`（4 个 gif：`notification` 32 帧 / `happy` 52 帧 / `sleeping` 64 帧 / `typing` 48 帧，336×352）是自身参考用素材，随**私有**仓库提交以便直接装包，`pack.json` 标 `license: private-repo-only`，不对外分发、不用于发布的产品。
 
 ### 3.11 包可见性与体积约束
 
@@ -508,16 +544,16 @@ device-id: <SharedPreferences 里的稳定 UUID>
 
 ---
 
-## 4. 实测记录（2026-11-07，0.7.0）
+## 4. 实测记录（2026-11-07，0.9.0）
 
 **构建**
 
 | 项 | 值 |
 | --- | --- |
-| 包名 / 版本 | `com.dsh.channel.whale` / `0.7.0`（code 7） |
+| 包名 / 版本 | `com.dsh.channel.whale` / `0.9.0`（code 9） |
 | SDK | minSdk 28 / targetSdk 34 / compileSdk 35 |
-| APK | 26,441,113 B（**25.22 MiB**） |
-| 资产 | 只剩 `assets/whale/emotion-map.json`（729 B） |
+| APK | 26,851,993 B（**25.61 MiB**） |
+| 资产 | `assets/packs/deepy/`（`pack.json` + `notification.gif` / `happy.gif` / `sleeping.gif` / `typing.gif`，多帧动图，**随仓库提交**） |
 | 原生库 | 无 |
 
 **PC 侧 ASR**（0.3.0 起未变）
