@@ -1,0 +1,27 @@
+.build/
+out/
+node_modules/
+archive/build-cache/
+
+# 上游仓库本地检出：仅作参考，不纳入本仓库
+/dsh-Go/
+/dsh-mobile-apk/
+/xiaozhi-esp32/
+/ESP32-S3-Touch-AMOLED-1.75C/
+
+# PC 侧 ASR：虚拟环境与模型体积大，按 README 的命令本地拉取
+/plugin/.venv/
+/plugin/models/
+
+# 插件运行时数据：配对码、会话 id、真实对话记忆，因机器而异，不入库
+/plugin/data/*
+!/plugin/data/.gitkeep
+
+# Android 构建产物（不入库）
+/android/.gradle/
+/android/.kotlin/
+/android/build/
+/android/app/build/
+/android/local.properties
+/android/.idea/
+*.iml
