@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>小鲸鱼 · 网页版</title>
+<style>
+  :root { color-scheme: dark; --bg:#0b1020; --card:#151d33; --line:#26324f; --fg:#e8edf9; --muted:#93a1c0; --accent:#6c8cff; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; background:radial-gradient(1000px 600px at 20% -10%, #1b2a55, transparent), var(--bg); color:var(--fg); font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:820px; margin:0 auto; padding:32px 20px 48px; }
+  header { display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+  h1 { margin:0; font-size:20px; letter-spacing:.3px; }
+  .tag { display:inline-flex; align-items:center; gap:10px; padding:6px 13px; border:1px solid var(--line); border-radius:999px; background:#0e1528; color:var(--muted); font-size:12px; }
+  .tag .dot { width:7px; height:7px; border-radius:50%; background:#4ade80; box-shadow:0 0 8px #4ade8080; flex:0 0 7px; }
+  .tag .dot.off { background:#f87171; box-shadow:none; }
+  .tag .sep { width:1px; height:11px; background:var(--line); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px; margin-top:18px; }
+  .stage { display:flex; gap:24px; align-items:center; }
+  .face { position:relative; width:132px; height:132px; flex:0 0 132px; border-radius:50%; background:linear-gradient(145deg,#2a3c75,#4c6ff0); box-shadow:0 0 42px #4169e166, inset 0 2px 6px #ffffff33; display:grid; place-items:center; transition:background .35s, box-shadow .35s, transform .35s; animation:float 3.6s ease-in-out infinite; }
+  @keyframes float { 50% { transform:translateY(-7px); } }
+  .eyes { display:flex; gap:26px; position:absolute; top:44px; }
+  .eye { width:13px; height:13px; border-radius:50%; background:#fff; transition:height .25s, transform .25s; }
+  .mouth { position:absolute; top:82px; width:40px; height:20px; border-bottom:4px solid #fff; border-radius:0 0 40px 40px; transition:.3s; }
+  .face[data-emotion="happy"] { background:linear-gradient(145deg,#2f7a5a,#5ce0a0); box-shadow:0 0 46px #5ce0a066; }
+  .face[data-emotion="happy"] .mouth { height:24px; border-radius:0 0 40px 40px; }
+  .face[data-emotion="sad"] { background:linear-gradient(145deg,#2b4a80,#6d8fd6); }
+  .face[data-emotion="sad"] .mouth { border-bottom:0; border-top:4px solid #fff; border-radius:40px 40px 0 0; }
+  .face[data-emotion="angry"] { background:linear-gradient(145deg,#7a3030,#ef6b6b); }
+  .face[data-emotion="angry"] .eye { height:7px; transform:rotate(18deg); }
+  .face[data-emotion="surprised"] { background:linear-gradient(145deg,#7a5c25,#f0c05c); }
+  .face[data-emotion="surprised"] .mouth { width:18px; height:18px; border:3px solid #fff; border-radius:50%; }
+  .face[data-emotion="thinking"] { background:linear-gradient(145deg,#4a3c7a,#9b7cf0); }
+  .face[data-emotion="thinking"] .eye { height:7px; }
+  .face[data-emotion="sleepy"] { background:linear-gradient(145deg,#26364f,#4c6690); }
+  .face[data-emotion="sleepy"] .eye { height:5px; }
+  .face[data-emotion="error"] { background:linear-gradient(145deg,#6b2436,#d04f6c); }
+  .meta { flex:1; min-width:0; }
+  .emotion { font-size:13px; color:var(--muted); }
+  .emotion b { color:var(--fg); font-size:18px; font-variant-numeric:tabular-nums; }
+  .reply { min-height:74px; white-space:pre-wrap; word-break:break-word; }
+  .cursor { display:inline-block; width:7px; height:16px; background:var(--accent); vertical-align:-2px; animation:blink .8s steps(2) infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+  .row { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
+  input { flex:1; min-width:0; background:#0e1528; border:1px solid var(--line); color:var(--fg); border-radius:10px; padding:11px 14px; font:inherit; outline:none; }
+  input:focus { border-color:var(--accent); }
+  button { background:var(--accent); border:0; color:#fff; border-radius:10px; padding:0 18px; font:inherit; font-weight:600; cursor:pointer; white-space:nowrap; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--muted); font-weight:400; }
+  button:disabled { opacity:.5; cursor:default; }
+  .hint { margin-top:12px; color:var(--muted); font-size:12px; }
+  code { background:#0e1528; padding:1px 5px; border-radius:4px; color:#b8c8ff; }
+</style>
+</head>
+<body>
+<main>
+  <header><h1>小鲸鱼</h1><span class="tag" id="health"><span class="dot"></span>连接中…</span></header>
+
+  <section class="card">
+    <div class="stage">
+      <div class="face" id="face" data-emotion="neutral">
+        <div class="eyes"><i class="eye"></i><i class="eye"></i></div>
+        <div class="mouth"></div>
+      </div>
+      <div class="meta">
+        <div class="emotion">心情：<b id="emotion">平常</b></div>
+        <div class="reply" id="reply">说点什么试试<span class="cursor"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="row">
+      <input id="text" placeholder="输入内容，或点麦克风说话" autocomplete="off" />
+      <input id="pin" placeholder="配对码" autocomplete="off" inputmode="numeric" style="flex:0 0 130px" />
+      <button id="mic" class="ghost" title="语音输入">麦克风</button>
+      <button id="send">发送</button>
+    </div>
+    <div class="hint">手机访问需要配对码（管理页可查），本机免填。声音在 <a href="/admin">管理页</a> 里调。</div>
+  </section>
+</main>
+<script>
+// 形象资源由外部提供：替换 MAP 的 value 为 gif URL 即可换肤，server 零改动。
+const MAP = {
+  neutral: 'neutral', happy: 'happy', sad: 'sad', angry: 'angry',
+  surprised: 'surprised', thinking: 'thinking', sleepy: 'sleepy', error: 'error',
+}
+const LABELS = {
+  neutral: '平常', happy: '开心', sad: '难过', angry: '生气',
+  surprised: '惊讶', thinking: '思考中', sleepy: '困了', error: '出错了',
+}
+const $ = (id) => document.getElementById(id)
+const face = $('face'), emotionEl = $('emotion'), reply = $('reply'), input = $('text'), pinInput = $('pin')
+let sessionId = localStorage.getItem('dsh-channel-device-id')
+if (!sessionId) {
+  sessionId = 'web-' + Math.random().toString(36).slice(2, 8)
+  localStorage.setItem('dsh-channel-device-id', sessionId)
+}
+pinInput.value = localStorage.getItem('dsh-channel-pin') ?? ''
+pinInput.oninput = () => localStorage.setItem('dsh-channel-pin', pinInput.value.trim())
+let speaking = false
+
+function setEmotion(value) {
+  const key = MAP[value] || 'neutral'
+  face.dataset.emotion = key
+  emotionEl.textContent = LABELS[value] || LABELS.neutral
+}
+
+function statusChip(items, ok) {
+  const box = $('health')
+  box.textContent = ''
+  const dot = document.createElement('span')
+  dot.className = `dot${ok ? '' : ' off'}`
+  box.append(dot)
+  items.forEach((text, i) => {
+    if (i) {
+      const sep = document.createElement('span')
+      sep.className = 'sep'
+      box.append(sep)
+    }
+    const item = document.createElement('span')
+    item.textContent = text
+    box.append(item)
+  })
+}
+
+async function checkHealth() {
+  try {
+    const h = await (await fetch('/api/health')).json()
+    statusChip([h.pluginLoaded ? '已连接' : '演示模式'], Boolean(h.pluginLoaded))
+  } catch {
+    statusChip(['未连接'], false)
+  }
+}
+
+// 音色由服务端定（管理页 /admin），这里只发文本，和 Android / 后续 ESP32 一致。
+function pinHeaders() {
+  const pin = pinInput.value.trim()
+  return pin ? { 'x-pin': pin } : {}
+}
+
+let audioEl = null
+async function speak(text) {
+  const value = String(text || '').trim()
+  if (!value) return
+  try {
+    const headers = { 'content-type': 'application/json', ...pinHeaders() }
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ text: value }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    const url = URL.createObjectURL(await res.blob())
+    if (audioEl) { audioEl.pause(); URL.revokeObjectURL(audioEl.src) }
+    audioEl = new Audio(url)
+    audioEl.onended = audioEl.onerror = () => URL.revokeObjectURL(url)
+    await audioEl.play()
+  } catch {
+    if (!('speechSynthesis' in window)) return
+    speechSynthesis.cancel()
+    speechSynthesis.speak(new SpeechSynthesisUtterance(value))
+  }
+}
+
+async function send(text) {
+  if (!text || speaking) return
+  speaking = true
+  $('send').disabled = true
+  reply.textContent = ''
+  setEmotion('thinking')
+  try {
+    const headers = { 'content-type': 'application/json', 'device-id': sessionId }
+    const pin = pinInput.value.trim()
+    if (pin) headers['x-pin'] = pin
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ text, sessionId }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (!line.trim()) continue
+        const msg = JSON.parse(line)
+        if (msg.type === 'delta') { reply.textContent += msg.text; reply.append(Object.assign(document.createElement('span'), { className: 'cursor' })) }
+        else if (msg.type === 'emotion') setEmotion(msg.emotion)
+        else if (msg.type === 'done') {
+          reply.textContent = msg.text
+          setEmotion(msg.emotion)
+          speak(msg.text)
+        } else if (msg.type === 'error') reply.textContent = `error: ${msg.message}`
+      }
+    }
+  } catch (e) {
+    reply.textContent = `request failed: ${e.message}`
+    setEmotion('error')
+  } finally {
+    speaking = false
+    $('send').disabled = false
+  }
+}
+
+$('send').onclick = () => { const v = input.value.trim(); input.value = ''; send(v) }
+input.onkeydown = (e) => { if (e.key === 'Enter') $('send').click() }
+$('mic').onclick = () => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+  if (!SR) { reply.textContent = '当前浏览器不支持语音识别，请用文本输入。'; return }
+  const rec = new SR()
+  rec.lang = 'zh-CN'
+  rec.interimResults = false
+  rec.onstart = () => { $('mic').textContent = '聆听中' }
+  rec.onresult = (e) => { input.value = e.results[0][0].transcript; $('send').click() }
+  rec.onerror = (e) => { reply.textContent = `语音识别失败: ${e.error}` }
+  rec.onend = () => { $('mic').textContent = '麦克风' }
+  rec.start()
+}
+checkHealth()
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "name": "dsh-channel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "client-agnostic DSH voice/emotion bridge for PC, Android and ESP32 clients",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": ["lib", "public", "cordis.patch.yml"],
+  "engines": {
+    "node": ">=22.19",
+    "dsh": ">=0.2.0-0 <0.3.0-0"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web" }
+  },
+  "scripts": {
+    "start": "node lib/index.js"
+  }
+}

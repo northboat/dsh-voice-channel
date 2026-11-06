@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>小鲸鱼 · 桌面端设置</title>
+<style>
+  :root { color-scheme: dark; --bg:#0b1020; --card:#151d33; --line:#26324f; --fg:#e8edf9; --muted:#93a1c0; --accent:#6c8cff; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 24px 56px; background:var(--bg); color:var(--fg); font:14px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:760px; margin:0 auto; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .tag { color:var(--muted); font-size:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; margin-top:16px; }
+  h2 { font-size:14px; margin:0 0 10px; }
+  .hint { color:var(--muted); font-size:12px; margin:0 0 10px; }
+  textarea, input, select { background:#0e1528; border:1px solid var(--line); border-radius:10px; color:var(--fg); padding:10px 12px; font:inherit; outline:none; }
+  textarea:focus, input:focus, select:focus { border-color:var(--accent); }
+  textarea { width:100%; min-height:110px; resize:vertical; }
+  input { width:140px; letter-spacing:2px; border-radius:9px; padding:7px 10px; }
+  select { border-radius:9px; padding:8px 10px; max-width:320px; }
+  input[type=number] { width:82px; letter-spacing:normal; }
+  label.field { color:var(--muted); font-size:12px; display:flex; gap:6px; align-items:center; }
+  .row { display:flex; gap:8px; margin-top:10px; align-items:center; flex-wrap:wrap; }
+  button { background:var(--accent); border:0; color:#fff; border-radius:9px; padding:8px 15px; font:inherit; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  .status { margin-left:auto; font-size:12px; color:var(--muted); }
+  code { background:#0e1528; border:1px solid var(--line); border-radius:6px; padding:3px 7px; font-size:12px; word-break:break-all; }
+  pre { margin:12px 0 0; padding:12px; background:#0e1528; border:1px solid var(--line); border-radius:10px; color:var(--fg); font-size:12px; line-height:1.6; max-height:320px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
+  .client { display:flex; gap:10px; align-items:center; padding:7px 0; border-bottom:1px solid var(--line); font-size:12px; }
+  .client:last-child { border-bottom:0; }
+  #clients { padding-bottom:12px; }
+  .client .id { flex:1; min-width:0; word-break:break-all; }
+  .client .meta { color:var(--muted); }
+  details.diag summary { cursor:pointer; color:var(--muted); font-size:12px; }
+  details.diag[open] summary { margin-bottom:8px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#4ade80; flex:0 0 8px; }
+  .dot.off { background:var(--muted); }
+  .dot.denied { background:#f87171; }
+</style>
+</head>
+<body>
+<main>
+  <h1>小鲸鱼</h1>
+  <div class="tag">角色、记忆和声音都在这里调。</div>
+
+  <section class="card">
+    <h2>角色定义</h2>
+    <p class="hint">点保存后，下一轮对话生效。</p>
+    <textarea id="persona" spellcheck="false"></textarea>
+    <div class="row"><button id="savePersona">保存角色</button><span class="status" id="status"></span></div>
+  </section>
+
+  <section class="card">
+    <h2>声音</h2>
+    <p class="hint">所有设备共用这把声音，保存后下一句生效（电脑需要联网）。</p>
+    <div class="row">
+      <select id="ttsVoice" title="Edge 音色"></select>
+      <button class="ghost" id="ttsLive">刷新在线音色</button>
+    </div>
+    <div class="row">
+      <label class="field">语速 %<input id="ttsRate" type="number" min="-50" max="100" step="1" /></label>
+      <label class="field">音调 Hz<input id="ttsPitch" type="number" min="-50" max="50" step="1" /></label>
+      <button class="ghost" id="ttsPreview">试听</button>
+      <button id="saveTts">保存音色</button>
+      <span class="status" id="ttsStatus"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>记忆</h2>
+    <p class="hint">每轮对话自动记一条，下次见面还认得你。</p>
+    <div class="row">
+      <code id="memoryPath">读取中…</code>
+      <button class="ghost" id="openLog">打开日志</button>
+      <button class="ghost" id="copyPath">复制路径</button>
+      <span class="status" id="logStatus"></span>
+    </div>
+    <pre id="logView" hidden></pre>
+  </section>
+
+  <section class="card">
+    <h2>配对码</h2>
+    <p class="hint">手机连接时填这个，保存后立即生效；本机不用填。</p>
+    <div class="row">
+      <input id="pin" inputmode="numeric" maxlength="8" autocomplete="off" />
+      <button id="savePin">保存配对码</button>
+      <button class="ghost" id="regen">换一个</button>
+      <span class="status" id="pinStatus"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>在线设备</h2>
+    <p class="hint">最近 5 分钟内连过的设备。</p>
+    <div id="clients"><div class="hint">读取中…</div></div>
+  </section>
+
+  <details class="card diag" id="diag">
+    <summary>运行状态</summary>
+    <div class="hint" id="runtime"></div>
+  </details>
+</main>
+<script>
+const $ = (id) => document.getElementById(id)
+
+function setStatus(text, id = 'status') {
+  const el = $(id)
+  el.textContent = text
+  setTimeout(() => { if (el.textContent === text) el.textContent = '' }, 2500)
+}
+
+async function load() {
+  const res = await fetch('/api/dsh-channel/state')
+  if (!res.ok) throw new Error(await res.text())
+  const data = await res.json()
+  $('persona').value = data.persona ?? ''
+  $('pin').value = data.pin ?? ''
+  $('pin').placeholder = data.pin ? '' : '重载 Desktop 后可见'
+  $('memoryPath').textContent = data.memoryLogPath ?? '重载 Desktop 后可用'
+  applyTts(data.tts ?? {})
+  const r = data.runtime ?? {}
+  const backend = r.backend === 'dsh' ? '本机引擎' : r.backend === 'demo' ? '演示模式' : '未知'
+  const line = `对话：${backend} · 会话：${r.sessionId ?? '无'} · 模型：${r.modelSelected ?? '未选择'} · 工作区：${r.workspaceTitle ?? '未就绪'}`
+  $('runtime').dataset.base = line
+  $('runtime').textContent = line
+}
+
+// 展开「运行状态」时才查一次健康检查，避免首页多打一个请求。
+$('diag').ontoggle = async () => {
+  if (!$('diag').open) return
+  const box = $('runtime')
+  const base = box.dataset.base ?? ''
+  try {
+    const h = await (await fetch('/api/health')).json()
+    const asr = h.asr?.ready ? '就绪' : '待命'
+    const tts = h.tts?.ready ? '就绪' : '待命'
+    box.textContent = `${base} · 识别：${asr} · 合成：${tts}`
+  } catch {
+    box.textContent = base
+  }
+}
+
+async function save(statusId, payload) {
+  const res = await fetch('/api/dsh-channel/state', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  const data = await res.json()
+  $('persona').value = data.persona ?? ''
+  if (data.pin) $('pin').value = data.pin
+  if (data.tts) applyTts(data.tts)
+  setStatus('已保存', statusId)
+}
+
+// ---- 语音音色 ----
+const VOICE_ROWS = [
+  ['zh-CN-XiaoxiaoNeural', '女'],
+  ['zh-CN-XiaoyiNeural', '女'],
+  ['zh-CN-YunjianNeural', '男'],
+  ['zh-CN-YunxiNeural', '男'],
+  ['zh-CN-YunxiaNeural', '男'],
+  ['zh-CN-YunyangNeural', '男'],
+  ['zh-CN-liaoning-XiaobeiNeural', '女·东北'],
+  ['zh-CN-shaanxi-XiaoniNeural', '女·陕西'],
+]
+let audio = null
+
+function renderVoices(rows, current) {
+  const select = $('ttsVoice')
+  const keep = current || select.value
+  select.textContent = ''
+  for (const row of rows) {
+    const name = typeof row === 'string' ? row : row.name
+    if (!name) continue
+    const option = document.createElement('option')
+    option.value = name
+    const tag = typeof row === 'string' ? '' : `（${row.gender === 'Male' ? '男' : '女'}）`
+    option.textContent = `${name}${tag}`
+    select.append(option)
+  }
+  if (keep && [...select.options].some((o) => o.value === keep)) select.value = keep
+}
+
+function applyTts(tts) {
+  if (tts.voice) {
+    if (![...$('ttsVoice').options].some((o) => o.value === tts.voice)) {
+      renderVoices(VOICE_ROWS.map(([name, tag]) => ({ name, gender: tag.startsWith('男') ? 'Male' : 'Female' })), tts.voice)
+    }
+    $('ttsVoice').value = tts.voice
+  }
+  $('ttsRate').value = tts.rate ?? 0
+  $('ttsPitch').value = tts.pitch ?? 0
+}
+
+async function loadVoices(live) {
+  try {
+    const res = await fetch(`/api/tts/voices?locale=zh${live ? '&live=1' : ''}`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    renderVoices(data.voices ?? [], data.current?.voice ?? $('ttsVoice').value)
+    if (data.current) {
+      $('ttsRate').value = data.current.rate
+      $('ttsPitch').value = data.current.pitch
+    }
+    setStatus(live ? `已刷新 ${data.count} 个音色` : '', 'ttsStatus')
+  } catch (error) {
+    setStatus(`音色清单失败：${error.message}`, 'ttsStatus')
+  }
+}
+
+$('ttsLive').onclick = () => loadVoices(true)
+
+$('ttsPreview').onclick = async () => {
+  const payload = {
+    text: '你好，我是小鲸鱼。这是当前音色的试听。',
+    voice: $('ttsVoice').value,
+    rate: Number($('ttsRate').value) || 0,
+    pitch: Number($('ttsPitch').value) || 0,
+  }
+  setStatus('合成中…', 'ttsStatus')
+  try {
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) throw new Error((await res.text()).slice(0, 120))
+    const url = URL.createObjectURL(await res.blob())
+    if (audio) { audio.pause(); URL.revokeObjectURL(audio.src) }
+    audio = new Audio(url)
+    audio.onended = audio.onerror = () => URL.revokeObjectURL(url)
+    await audio.play()
+    setStatus(`试听 ${res.headers.get('x-tts-voice') ?? ''}`, 'ttsStatus')
+  } catch (error) {
+    setStatus(`试听失败：${error.message}`, 'ttsStatus')
+  }
+}
+
+$('saveTts').onclick = () => save('ttsStatus', {
+  tts: {
+    voice: $('ttsVoice').value,
+    rate: Number($('ttsRate').value) || 0,
+    pitch: Number($('ttsPitch').value) || 0,
+  },
+}).catch((error) => setStatus(`失败：${error.message}`, 'ttsStatus'))
+
+function timeOf(ms) {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+}
+
+async function loadClients() {
+  const box = $('clients')
+  try {
+    const res = await fetch('/dsh-channel/clients')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const rows = await res.json()
+    box.textContent = ''
+    if (!rows.length) {
+      const empty = document.createElement('div')
+      empty.className = 'hint'
+      empty.textContent = '暂无设备接入。'
+      box.append(empty)
+      return
+    }
+    for (const row of rows) {
+      const line = document.createElement('div')
+      line.className = 'client'
+      const dot = document.createElement('span')
+      dot.className = `dot${row.auth === 'denied' ? ' denied' : row.online ? '' : ' off'}`
+      const id = document.createElement('span')
+      id.className = 'id'
+      id.textContent = row.id
+      const meta = document.createElement('span')
+      meta.className = 'meta'
+      const auth = row.auth === 'denied' ? '未通过校验' : '已授权'
+      meta.textContent = `${auth} · 最近 ${timeOf(row.lastSeen)}${row.requests > 1 ? ` · ${row.requests} 次` : ''}`
+      line.append(dot, id, meta)
+      box.append(line)
+    }
+  } catch (error) {
+    box.textContent = String(error.message).includes('404') ? '需重载 Desktop 后可用' : `读取失败：${error.message}`
+  }
+}
+
+$('savePersona').onclick = () => save('status', { persona: $('persona').value }).catch((e) => setStatus(`失败：${e.message}`, 'status'))
+$('savePin').onclick = () => save('pinStatus', { pin: $('pin').value }).catch((e) => setStatus(`失败：${e.message}`, 'pinStatus'))
+$('regen').onclick = () => { $('pin').value = String(Math.floor(100000 + Math.random() * 900000)); setStatus('已生成，点「保存 PIN」生效', 'pinStatus') }
+let logOpen = false
+$('openLog').onclick = async () => {
+  const box = $('logView')
+  if (logOpen) {
+    box.hidden = true
+    logOpen = false
+    $('openLog').textContent = '打开日志'
+    return
+  }
+  try {
+    const res = await fetch('/dsh-channel/memory.log')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    box.textContent = (await res.text()) || '（暂无记忆）'
+    box.hidden = false
+    logOpen = true
+    $('openLog').textContent = '收起日志'
+  } catch (error) {
+    box.textContent = `读取失败：${error.message}`
+    box.hidden = false
+  }
+}
+$('copyPath').onclick = () => navigator.clipboard?.writeText($('memoryPath').textContent)
+  .then(() => setStatus('路径已复制', 'logStatus'))
+  .catch(() => setStatus('复制失败，请手动选中路径', 'logStatus'))
+renderVoices(VOICE_ROWS.map(([name, tag]) => ({ name, gender: tag.startsWith('男') ? 'Male' : 'Female' })))
+load().catch((e) => { $('runtime').textContent = `读取失败：${e.message}` })
+loadVoices()
+loadClients()
+setInterval(loadClients, 5000)
+</script>
+</body>
+</html>
