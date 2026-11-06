@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "dir": "whale",
+  "suffix": "-zh-dark",
+  "extension": ".gif",
+  "reference": "dsh-Go/docs/assets/pet-deepy-{happy,notification,sleeping,typing}-{en|zh}-{dark|light}.gif",
+  "note": "只参考状态与命名；dsh-Go/ASSETS.md 明确素材不可用于自己发布的产品，本项目不复制、不分发这些 gif。把自建鲸鱼 gif 放进 app/src/main/assets/whale/，按 <key><suffix><extension> 命名；缺失时回退到内置程序化鲸鱼动画。",
+  "emotions": {
+    "neutral": "idle",
+    "happy": "happy",
+    "sad": "notification",
+    "angry": "notification",
+    "surprised": "notification",
+    "thinking": "typing",
+    "sleepy": "sleeping",
+    "error": "error"
+  }
+}

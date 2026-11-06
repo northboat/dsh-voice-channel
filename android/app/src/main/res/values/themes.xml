@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.DshWhale" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@color/deep_bg</item>
+        <item name="android:navigationBarColor">@color/deep_bg</item>
+        <item name="android:windowBackground">@color/deep_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

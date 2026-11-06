@@ -1,0 +1,1 @@
+-keep class com.dsh.channel.whale.voice.VoicePack { *; }
