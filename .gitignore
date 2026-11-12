@@ -17,7 +17,7 @@ archive/build-cache/
 /plugin/data/*
 !/plugin/data/.gitkeep
 
-# 形象包：deepy 的动画（4 个 gif）随仓库提交，方便直接装包就有动态形象；
+# 形象素材是外置的（APK 只带内置 Eva）：样本包放根目录 assets/，导入用的 zip 也在那儿；
 # 素材来源与许可边界见 android/README.md 3.10，只在本仓库私有使用，不对外分发。
 # 冒烟测试的临时数据
 /.smoke/

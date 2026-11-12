@@ -1,6 +1,6 @@
 // 插件专用会话：client 输入进同一个 DSH session，回复从 session/event 收回。
 // 每次 /api/chat 动态 import，改本文件无需重载 Desktop 插件。
-import { readState, writeState, promptOf, contextOf, appendTurn } from './state.js'
+import { readState, writeState, promptOf, contextOf, appendTurn, personaForClient } from './state.js'
 
 const SESSION_PREFIX = 'dsh-voice-channel-'
 const WORKSPACE_TITLE = 'dsh-voice-channel'
@@ -8,7 +8,7 @@ const WORKSPACE_TITLE = 'dsh-voice-channel'
 const SECTION_NAME = 'dsh-voice-channel:context'
 const SECTION_ORDER = 20000
 // 改 section 闭包时递增：热加载会先 dispose 旧 section 再注册，不必重载 Desktop。
-const SECTION_VERSION = 1
+const SECTION_VERSION = 2
 
 // 事件字段见 dsh-Go/packages/dsh_client/lib/src/models.dart:310-441：
 // assistant/message  data.message.content[] = {type:'text', text}
@@ -271,8 +271,9 @@ async function ensureWorkspace(ctx, info, sessionId) {
   }
 }
 
-function personaText(state) {
-  return contextOf({ persona: state.persona, memory: [] })
+// 角色按设备取：管理页给每台 client 绑了角色就用绑定的，没绑就用「默认角色」。
+function personaText(state, clientId) {
+  return contextOf({ persona: personaForClient(state, clientId), memory: [] })
 }
 
 function memoryText(state) {
@@ -290,7 +291,7 @@ function registerPromptSection(service, info) {
     text: (assembly) => {
       const agent = assembly?.agent ?? assembly?.scope
       if (!info.__sessionId || ![agent?.id, agent?.session?.id].includes(info.__sessionId)) return ''
-      return [personaText(readState()), info.__memorySnapshot ?? ''].filter(Boolean).join('\n\n')
+      return [personaText(readState(), info.__clientId), info.__memorySnapshot ?? ''].filter(Boolean).join('\n\n')
     },
   })
   info.__promptSection = true
@@ -350,7 +351,9 @@ function loadMemory(info, state, sessionId) {
 
 export function createChat(ctx, info) {
   const sectionReady = ensurePromptSection(ctx, info)
-  return async function* chat(text) {
+  return async function* chat(text, request) {
+    // 当前请求来自哪台设备：system prompt 的角色定义按它选。
+    if (request?.clientId) info.__clientId = String(request.clientId)
     const rpcs = findRpc(ctx, info)
     if (!info.__sessionId) {
       const saved = readState().sessionId

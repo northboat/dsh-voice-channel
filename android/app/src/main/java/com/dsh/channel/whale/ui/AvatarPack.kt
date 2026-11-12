@@ -1,6 +1,7 @@
 package com.dsh.channel.whale.ui
 
 import android.content.Context
+import android.graphics.ImageDecoder
 import android.net.Uri
 import com.dsh.channel.whale.Emotion
 import org.json.JSONObject
@@ -28,7 +29,8 @@ import java.util.zip.ZipInputStream
  * }
  * ```
  *
- * 两个来源：随包的 `assets/packs/<id>/`（只读）和用户导入的 `filesDir/packs/<id>/`。
+ * 内置形象是不依赖素材的 Eva；除此之外所有素材都在 `filesDir/packs/<id>/`，
+ * 只能通过导入 zip 添加，之后可重命名、覆盖导入、删除。APK 里不带任何素材文件。
  */
 data class AvatarPack(
     val id: String,
@@ -37,12 +39,9 @@ data class AvatarPack(
     val states: Map<String, String>,
     val fallback: String,
     val files: Set<String>,
-    /** 导入的包落在 filesDir；内置包为 null（读 assets）。 */
-    val dir: File? = null,
+    val dir: File,
 ) {
-    val imported: Boolean get() = dir != null
-
-    /** 情绪 → 素材引用；null 表示这个包没有可用文件，调用方回退内置动画。 */
+    /** 情绪 → 素材引用；null 表示这个包没有可用文件，调用方回退内置 Eva。 */
     fun asset(emotion: Emotion): AvatarRef? {
         val anim = emotions[emotion.key] ?: fallback
         return resolve(anim) ?: resolve(fallback)
@@ -51,46 +50,70 @@ data class AvatarPack(
     private fun resolve(anim: String): AvatarRef? {
         val file = states[anim] ?: "$anim.gif"
         if (!files.contains(file)) return null
-        return dir?.let { AvatarRef.Local(File(it, file)) }
-            ?: AvatarRef.Asset("${AvatarPacks.ROOT}/$id/$file")
+        return AvatarRef.Local(File(dir, file))
     }
 }
 
-/** 素材位置：包内 assets 或用户导入的私有目录。 */
+/** 素材位置：只可能是用户目录，assets 里的原始包在首次启动时已经复制过去。 */
 sealed interface AvatarRef {
-    /** 相对 assets 的路径，如 `packs/deepy/idle.gif`。 */
-    data class Asset(val path: String) : AvatarRef
-
     data class Local(val file: File) : AvatarRef
 }
 
 object AvatarPacks {
     const val ROOT = "packs"
 
-    /** 空字符串代表内置程序化鲸鱼。 */
+    /** 空字符串代表内置 Eva（不依赖任何素材文件）。 */
     const val BUILT_IN = ""
 
     private const val MAX_ENTRIES = 500
 
-    fun load(context: Context): List<AvatarPack> {
-        val builtIn = runCatching {
-            context.assets.list(ROOT).orEmpty().mapNotNull { readAssets(context, it) }
-        }.getOrDefault(emptyList())
-        val imported = runCatching {
-            packsDir(context).listFiles().orEmpty()
-                .filter { it.isDirectory }
-                .mapNotNull { readDir(it) }
-        }.getOrDefault(emptyList())
-        // 同 id 时导入的覆盖内置（否则设置页会出现两个同名项）。
-        return (builtIn + imported).associateBy { it.id }.values.sortedBy { it.name.lowercase() }
-    }
+    /**
+     * 素材第一帧的边缘平均色：页面背景用它，素材底色就和背景一致，看起来是融进去的。
+     * 透明底素材（大部分像素 alpha=0）没有底色可言，返回 null 让页面用主题色。
+     */
+    fun tintOf(pack: AvatarPack): Int? = runCatching {
+        val file = (pack.asset(Emotion.NEUTRAL) as? AvatarRef.Local)?.file ?: return@runCatching null
+        val bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, _, _ ->
+            decoder.setTargetSize(12, 12)
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+        }
+        val w = bitmap.width
+        val h = bitmap.height
+        var r = 0
+        var g = 0
+        var b = 0
+        var n = 0
+        var opaque = 0
+        fun take(x: Int, y: Int) {
+            val c = bitmap.getPixel(x, y)
+            if (android.graphics.Color.alpha(c) < 200) return
+            opaque += 1
+            r += android.graphics.Color.red(c)
+            g += android.graphics.Color.green(c)
+            b += android.graphics.Color.blue(c)
+            n += 1
+        }
+        for (x in 0 until w) { take(x, 0); take(x, h - 1) }
+        for (y in 1 until h - 1) { take(0, y); take(w - 1, y) }
+        bitmap.recycle()
+        // 边缘几乎全透明 = 素材已经抠过底，别拿角色颜色去染整页背景。
+        if (opaque * 3 < (w + h) * 2 || n == 0) null
+        else android.graphics.Color.rgb(r / n, g / n, b / n)
+    }.getOrNull()
+
+    fun load(context: Context): List<AvatarPack> = runCatching {
+        packsDir(context).listFiles().orEmpty()
+            .filter { it.isDirectory }
+            .mapNotNull { readDir(it) }
+            .sortedBy { it.name.lowercase() }
+    }.getOrDefault(emptyList())
 
     fun find(packs: List<AvatarPack>, id: String): AvatarPack? =
         if (id.isEmpty()) null else packs.firstOrNull { it.id == id }
 
     /**
      * 导入 zip（压缩包根目录或唯一子目录里要有 pack.json）。
-     * 返回新包；同 id 的旧包会被覆盖。
+     * 同 id 视为覆盖更新。
      */
     fun importZip(context: Context, uri: Uri): AvatarPack {
         val staging = File(context.cacheDir, "pack-import-${System.currentTimeMillis()}").apply { mkdirs() }
@@ -115,8 +138,18 @@ object AvatarPacks {
         }
     }
 
-    /** 只允许删除导入的包；内置包在 assets 里，删不了也不需要删。 */
-    fun delete(pack: AvatarPack): Boolean = pack.dir?.deleteRecursively() ?: false
+    /** 改名只动 `pack.json` 的 `name`，目录 id 保持不变（id 是引用键）。 */
+    fun rename(pack: AvatarPack, name: String): AvatarPack? = runCatching {
+        val clean = name.trim().take(24)
+        if (clean.isBlank()) return null
+        val manifest = File(pack.dir, "pack.json")
+        val json = JSONObject(manifest.readText())
+        json.put("name", clean)
+        manifest.writeText(json.toString(2))
+        readDir(pack.dir)
+    }.getOrNull()
+
+    fun delete(pack: AvatarPack): Boolean = pack.dir.deleteRecursively()
 
     private fun packsDir(context: Context): File =
         File(context.filesDir, ROOT).apply { mkdirs() }
@@ -152,18 +185,13 @@ object AvatarPacks {
         return File(subDirs.first(), "pack.json").takeIf { it.isFile }
     }
 
-    private fun readAssets(context: Context, dir: String): AvatarPack? = runCatching {
-        val text = context.assets.open("$ROOT/$dir/pack.json").bufferedReader().use { it.readText() }
-        parse(text, dir, context.assets.list("$ROOT/$dir")?.toSet().orEmpty(), null)
-    }.getOrNull()
-
     private fun readDir(dir: File): AvatarPack? = runCatching {
         val manifest = File(dir, "pack.json")
         if (!manifest.isFile) return null
         parse(manifest.readText(), dir.name, dir.list()?.toSet().orEmpty(), dir)
     }.getOrNull()
 
-    private fun parse(text: String, dirName: String, files: Set<String>, dir: File?): AvatarPack {
+    private fun parse(text: String, dirName: String, files: Set<String>, dir: File): AvatarPack {
         val obj = JSONObject(text)
         return AvatarPack(
             id = obj.optString("id", dirName).ifBlank { dirName },

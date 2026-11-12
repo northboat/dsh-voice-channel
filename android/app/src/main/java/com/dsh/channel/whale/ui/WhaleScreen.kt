@@ -25,7 +25,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -33,11 +36,13 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.dsh.channel.whale.Emotion
 import com.dsh.channel.whale.Phase
 import com.dsh.channel.whale.UiState
 import com.dsh.channel.whale.net.LanDiscovery
@@ -73,8 +78,36 @@ fun WhaleScreen(
     onPack: (String) -> Unit,
     onImport: () -> Unit,
     onDeletePack: (String) -> Unit,
+    onRenamePack: (String, String) -> Unit,
 ) {
     val pack = remember(state.packs, state.packId) { AvatarPacks.find(state.packs, state.packId) }
+
+    // 素材包不看服务端情绪，只看通话走到哪一步：待机 sleeping、通话中 happy、
+    // 思考 typing、说完先闪 2 s notification 再回 happy。
+    var wasSpeaking by remember { mutableStateOf(false) }
+    var justFinished by remember { mutableStateOf(false) }
+    LaunchedEffect(state.phase) {
+        if (state.phase == Phase.SPEAKING) {
+            wasSpeaking = true
+            return@LaunchedEffect
+        }
+        if (wasSpeaking) {
+            wasSpeaking = false
+            justFinished = true
+            try {
+                delay(2000)
+            } finally {
+                justFinished = false
+            }
+        }
+    }
+    val packEmotion = when {
+        !state.callActive -> Emotion.SLEEPY
+        justFinished -> Emotion.NEUTRAL // 包内 neutral → idle（notification）
+        state.phase == Phase.THINKING -> Emotion.THINKING
+        else -> Emotion.HAPPY
+    }
+
     LaunchedEffect(state.message) {
         if (state.message != null) {
             delay(8000)
@@ -82,16 +115,32 @@ fun WhaleScreen(
         }
     }
 
+    // 背景跟着素材底色走：素材底是什么色，页面就是什么色，边界自然融掉。
+    // 有素材时必须是纯色——渐变会让素材的四边重新显出轮廓。
+    val background = remember(state.tint) {
+        if (state.tint == UiState.DEFAULT_TINT) {
+            Brush.verticalGradient(listOf(Color(0xFF0B1020), Color(0xFF121C38), Color(0xFF0B1020)))
+        } else {
+            SolidColor(backgroundOf(state.tint))
+        }
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color(0xFF0B1020), Color(0xFF121C38), Color(0xFF0B1020))
-                )
-            )
+            .background(background)
             .systemBarsPadding(),
     ) {
+        // 脸就是这一整块屏幕：五官按整屏比例铺开，没有边框，也没有任何底衬；
+        // 文字和通话按钮只是浮在脸的最下方，不占脸的面积。
+        WhaleAvatar(
+            emotion = state.emotion,
+            phase = state.phase,
+            pack = pack,
+            modifier = Modifier.fillMaxSize(),
+            packEmotion = packEmotion,
+        )
+
+        // 设置按钮放在形象之后：素材再大也盖不住它。
         IconButton(
             onClick = onSettings,
             modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
@@ -101,18 +150,12 @@ fun WhaleScreen(
 
         Column(
             modifier = Modifier
-                .align(Alignment.Center)
+                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp),
+                .padding(start = 24.dp, end = 24.dp, bottom = 152.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            WhaleAvatar(
-                emotion = state.emotion,
-                phase = state.phase,
-                pack = pack,
-                modifier = Modifier.size(260.dp),
-            )
-            Spacer(Modifier.height(20.dp))
+            // 只留字幕：状态文案统一由底部按钮那一行显示，别在这里再写一遍。
             Text(
                 text = state.subtitle.ifBlank { " " },
                 color = Color(0xFFC7D2EC),
@@ -120,12 +163,6 @@ fun WhaleScreen(
                 lineHeight = 18.sp,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
-            )
-            Text(
-                text = state.status,
-                color = Color(0xFF6F7FA3),
-                fontSize = 11.sp,
-                textAlign = TextAlign.Center,
             )
             state.message?.let { message ->
                 Spacer(Modifier.height(12.dp))
@@ -189,9 +226,22 @@ fun WhaleScreen(
                 onPack = onPack,
                 onImport = onImport,
                 onDeletePack = onDeletePack,
+                onRenamePack = onRenamePack,
             )
         }
     }
+}
+
+/**
+ * 素材底色 → 背景色：色相不动，只把明度 / 饱和度限制在深色主题还能看清字的范围。
+ * 素材本身够暗时（绝大多数深色素材）会原样返回，做到「素材底就是背景」。
+ */
+private fun backgroundOf(tint: Int): Color {
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(tint, hsv)
+    hsv[1] = hsv[1].coerceIn(0.05f, 0.60f)
+    hsv[2] = hsv[2].coerceIn(0.04f, 0.26f)
+    return Color(android.graphics.Color.HSVToColor(hsv))
 }
 
 /** 自绘挂断：倒扣的听筒，与 MicGlyph 一样不引入扩展图标库。 */

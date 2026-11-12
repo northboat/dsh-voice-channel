@@ -19,10 +19,12 @@
 | --- | --- |
 | `README.md` | 项目简介、参考仓库、开源合规 |
 | `docs/technical-proposal.md` | 技术方案（选型/架构/部署/验证/许可） |
+| `docs/dev-guide.md` | **本地开发指南**：构建装包、改形象、插件热生效、素材裁切打包（ESP32 留白） |
 | `TODO.md` | 三阶段实施 + 情绪契约 + **预留任务 T1（prompt 注入优化）** |
 | `HANDOFF.md` | 本文件 |
 | `plugin/` | 插件实现 |
 | `android/`、`esp32/`、`archive/` | 后续 client / 归档旧方向 |
+| `assets/` | 素材目录：样本形象包 `deepy/`（4 个动画 WebP）+ 导入用 `deepy.zip`，不进 APK |
 
 四个外部检出（`dsh-Go/`、`dsh-mobile-apk/`、`xiaozhi-esp32/`、`ESP32-S3-Touch-AMOLED-1.75C/`）仅本地参考，不提交。
 
@@ -33,8 +35,8 @@
 | `plugin/package.json` | `engines.dsh`、`dsh.bundle.patch`、`dsh.client.platform=web`、无依赖 |
 | `plugin/cordis.patch.yml` | `- insert: [{id: dsh-voice-channel, name: dsh-voice-channel}]` |
 | `plugin/public/index.html` | 演示页：麦克风、NDJSON 流式、`emotion→形象`、speechSynthesis、状态胶囊、持久化 `device-id` + PIN 输入 |
-| `plugin/public/admin.html` | 管理页：角色定义、`memory.log` 路径/内联查看、可改 PIN、已连接 client（5 s 刷新）；运行状态并入顶部描述行 |
-| `plugin/data/state.json` | `{persona, sessionId, pin}` |
+| `plugin/public/admin.html` | 管理页：角色列表（当前角色角标「默认角色」）、`memory.log` 路径/内联查看、可改 PIN、在线设备（每台一个角色下拉，5 s 刷新）；运行状态并入顶部描述行 |
+| `plugin/data/state.json` | `{roles, activeRoleId, bindings, persona, sessionId, pin, tts{voice,rate,pitch}}` |
 | `plugin/data/memory.log` | 长期记忆唯一存储源：JSONL `{time,role,text}`，**全量保留**，按会话载入最近 20 条快照（`INJECT_MEMORY=20`） |
 | `plugin/lib/state.js` | 状态读写、`validPin`/`randomPin`、`contextOf`（生成角色/记忆文本，供 system prompt 使用）、`promptOf`（仅降级时拼用户消息）、`appendTurn` |
 | `plugin/lib/index.js` | 8787 服务；`/api/health`、`/api/chat`（LAN 需 PIN、记录 client）、`detectEmotion`；`apply(ctx)` 注入服务 + 事件总线 + 同源路由；页面每次请求读文件 |
@@ -94,7 +96,7 @@
 3. **首次完整提交**：把 `plugin/`、`docs/`、`android/app/`、`android/gradle*`、`archive/` 等未跟踪文件归位入库；`.gitignore` 已挡 `plugin/models`、`plugin/.venv`、`android/*/build`。
 4. **`ArchivedSessionGate` 守卫**：`chat.js` 复用 `sessionId` 前排除归档会话，避免 `turn/end blocked` 静默空回复。
 5. **T1 剩余验收**（模型不再 blocked 后）：发一条正常消息，确认角色定义生效、能回忆 `memory.log` 里的「青柠」，且会话历史不新增 `[角色定义]/[长期记忆]` 前缀；管理页改角色后下一轮生效。
-6. 其余按 `TODO.md`：阶段 1 的 WS / token 鉴权 / 流式 / 打断未做；**阶段 2 进行中**——Android 0.7.0（APK 25.22 MiB、ASR 与 TTS 均在插件端、**通话模式常驻监听 + 插话打断**），界面已产品化；阶段 3 未开始。旧 `dsh-bridge-*` / `esp32-bridge-*` 归档会话可在 Desktop 删。
+6. 其余按 `TODO.md`：阶段 1 的 WS / token 鉴权 / 流式 / 打断未做；**阶段 2 进行中**——Android 0.10.1（debug APK 25.45 MiB、ASR 与 TTS 均在插件端、**通话模式常驻监听 + 插话打断**、形象是「屏幕即脸的发光眼 Eva」+ 可导入素材包），界面已产品化；阶段 3 未开始。旧 `dsh-bridge-*` / `esp32-bridge-*` 归档会话可在 Desktop 删。
 
 ## 已知取舍
 
@@ -214,6 +216,38 @@
 - 校验方式：真机 PLE110 / Android 16 连续截图比对头像区域像素持续变化；帧数用 `System.Drawing` 与手写解析两条独立路径确认，别只信文件名或体积。
 - **素材改为随仓库提交**：`.gitignore` 去掉 `assets/packs/**/*.gif|webp` 排除，`pack.json` 的 `license` 改 `private-repo-only`；许可边界不变——素材仅限本机与私有仓库，不对外发布。
 - 版本 `0.9.0 / versionCode 9`，APK `26,851,993 B`（25.61 MiB）。
+
+## 形象库重做 + 设备绑定角色（2026-11-12，Android 0.10.0 / 插件）
+
+四件事：内置形象换成线条 Eva、素材变成可拆装、素材和背景融为一体、插件给每台设备绑角色。
+
+- **内置形象 `BuiltInEva`**（`ui/WhaleAvatar.kt`）：不再画鲸鱼，改成纯 Canvas 线条——圆角矩形头框 + 两条可弯可斜的眼睛 + 两道脖子线；情绪只改眼形（开心上弯 / 难过下垂 / 生气更斜 / 惊讶变椭圆 / 思考一只眼半闭 / 睡着压扁 / 出错打叉），说话和听着时底部浮出声波。零素材依赖，删光素材也不会白屏。
+- **素材完全外置**（`ui/AvatarPack.kt`）：APK 不带任何素材，内置只有 Eva。素材只能通过「导入素材」选 zip 添加，落到 `filesDir/packs/<id>/`，之后可改名（只改 `pack.json` 的 `name`）、同 id 覆盖导入、删除（删除前有确认弹窗）。样本包在 `assets/deepy/`，打好的 `assets/deepy.zip` 推到手机 `Download/` 直接导入；**没有「恢复内置」按钮**，删了重新导入 zip 即可。
+- **素材层面的去边框**：deepy 的卡片底板用 `android/tools/strip-avatar-bg.py` 逐帧抠成透明，输出动画 WebP（`notification` 32 / `happy` 52 / `sleeping` 64 / `typing` 48 帧，合计 ~66 KB，原 GIF 374 KB）。`pack.json` 的 `states` 改指 `.webp`；Android 侧 `ImageDecoder` 直接解动画 WebP，帧推进靠自建 `Drawable.Callback`。
+- **背景跟随素材**（`ui/WhaleScreen.kt`）：`AvatarPacks.tintOf()` 解 12×12 缩略图取边缘平均色（透明底素材返回 null），页面用该色作纯色背景——素材底和页面同色，边界自然消失。不要在这条路径上加渐变，渐变会让素材四边重新显出轮廓。
+- **设置页形象区**：Eva + 素材列表，选中/改名/删除（垃圾桶图标）、导入素材、恢复内置；没手动选过形象时默认选第一个素材。
+- **插件 client 绑定角色**：`state.json` 新增 `bindings: { clientId: roleId }`（最多 100 条，角色删掉后自动清掉失效绑定）。`/api/chat` 用 `device-id` 找绑定，`personaForClient()` 决定这台设备用哪个角色的定义；没绑就用管理页标着「默认角色」的那个。管理页「在线设备」每行一个角色下拉，改动即存（`POST /api/dsh-voice-channel/state { bindings }`）。
+- **限制**：所有设备仍共用一个 DSH 会话，只是角色定义按设备取；要彻底隔离得按 clientId 分会话，本轮没做。
+- 版本 `0.10.1 / versionCode 11`，APK `26,515,676 B`（25.29 MiB，assets 里已无素材）；真机验证：只剩 Eva、透明素材导入后播放正常、删除确认可用、背景同色融合。
+
+## 形象收敛成「屏幕即脸」+ 管理页改名（2026-11-12 迭代，仍是 0.10.1 / code 11）
+
+同一版里又改了三轮，方向从「画一个头」变成**不画头**：
+
+- **先删轮廓，再删嘴**：头框、脖子线、腮红、背后的径向渐变光晕全删——光晕在纯色背景上看着脏，边框一去掉，屏幕本身就是脸的轮廓。嘴巴也去掉，只留眼睛。
+- **眼睛按 EVE 重做**（`ui/WhaleAvatar.kt`）：`bar()` 用四层同形叠加冒充 blur（`EvaEyeHalo` α0.09 → `EvaEyeRim` α0.22 → `EvaEyeMid` → `EvaEyeCore` α0.38，横纵同比例放大），不开 `BlurMaskFilter`、不多开图层；`arcEye()` 画笑眼，`cross()` 画 error，都是同色三层。
+- **情绪只靠眼形**：neutral 两块圆润光斑（对齐参考图）/ happy 上弯弧 / sad 内端抬外端垂 ±11° / angry ±16° 更扁 / surprised 短而高 / thinking 一眼收窄一眼抬高偏侧 / sleepy 压到 0.32 厚 / error 发光 X；眨眼 5.2 s 一次把光斑压扁。
+- **比例必须按整屏算**（`ui/WhaleScreen.kt`）：之前 `WhaleAvatar(modifier = Modifier.size(260.dp))` 把形象锁在屏幕正中一小块，绘制参数怎么调都「紧凑」。改成根 `Box` 的第一层 `Modifier.fillMaxSize()`，字幕与通话按钮用 `align(BottomCenter) + bottom 152dp` 浮在脸上；尺寸全按屏宽比例：眼距 ±0.205w、眼长 0.25w、眼高 0.10w、眼睛在 0.40h。
+- **踩坑**：先查容器尺寸再查绘制参数。`Modifier.size` + 居中的 `Column` 会让「按屏幕比例铺开」完全失真。
+- **管理页改名**（`plugin/public/admin.html`）：角色角标 `使用中` → `默认角色`，行内与弹窗按钮改成 `设为默认角色`，hint 同步；在线设备的角色下拉不再有「跟随使用中」这个概念——没绑过就是默认角色，选过即写 `bindings`。
+- 版本仍是 `0.10.1 / versionCode 11`，debug APK `26,691,658 B`（25.45 MiB）；每轮都 `adb install -r` 到 PLE110 截图确认（总宽、眼距、光斑圆润度共调了五版）。
+
+### 素材去文字 + 素材按通话阶段播（同日继续）
+
+- **素材重做**（`assets/deepy/`）：原 4 个动画 WebP 是 336×352，角色画在 y66–237、底部说明文字在 y298–323。按 `(x56, y40, 224×224)` 逐帧裁切就去掉了整条文字（sharp 的 `extract()` 对动画逐帧生效，帧数与每帧延迟都保留），再用 `webp({ loop:0, lossless:true, effort:6 })` 编码——像素画无损比有损更小，边缘也不会糊。四文件 66 KB → 54 KB，`deepy.zip` 重新打包 43 KB。本机没有可用 Python（`python` 是 uv 坏 shim），改用 Node + `sharp`，流程写进 `docs/dev-guide.md`。
+- **素材包改由通话阶段驱动**（`ui/WhaleScreen.kt` 的 `packEmotion` + `WhaleAvatar(packEmotion=…)`）：待机 sleeping / 通话中 happy / 思考 typing / 说完先 notification 2 s 再回 happy；内置 Eva 仍吃插件下发的 `emotion`，两条路分开。
+- **两个真机 bug**：①「形象糊」——放大时默认双线性过滤，`loaded.setFilterBitmap(false)` 才对；②「麦克风点不动」——每帧整屏 `saveLayer` 做羽化，把主线程拖到 `Skipped 360 frames`，输入事件延迟 1.3 s。素材早就是透明底，羽化整层删掉、绘制缩到屏宽 86%（`top - 0.06h` 抵消素材重心偏低），点击立刻恢复。另外素材层要画在设置按钮之前，否则盖住图标。
+- **点击后要等约 1 s 才进通话**：`CallSpeechInput.start()` 在主线程切音频模式 → 开 `AudioRecord` → `probeHasAudio()` 采 5 帧（最坏 500 ms）→ 建 AEC/降噪，`stop()` 还要 join 工作线程。改为 ViewModel 里的单线程 `speechWorker` 串行执行 `start()/stop()`，UI 先切状态，点击立刻响应。顺带：`CompositingStrategy.Offscreen` 只在淡入那 220 ms 启用（常驻等于每帧多渲染一整屏）；主页删掉与底部按钮重复的那行状态文案（字幕行保留）。
 
 ## 2026-11-07 收尾：新会话从这里开始
 

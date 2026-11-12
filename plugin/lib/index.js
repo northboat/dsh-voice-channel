@@ -31,8 +31,15 @@ function pinFrom(req) {
   return (auth.startsWith('Bearer ') ? auth.slice(7).trim() : '') || String(req.headers['x-pin'] ?? '').trim()
 }
 
+/** 设备标识：client 侧固定带 device-id，没有就退回 payload 里的字段。 */
+function clientIdOf(req, payload) {
+  return String(
+    req.headers['device-id'] ?? req.headers['x-device-id'] ?? payload?.deviceId ?? payload?.sessionId ?? 'unknown',
+  ).slice(0, 64)
+}
+
 function noteClient(req, payload, auth) {
-  const id = String(req.headers['device-id'] ?? req.headers['x-device-id'] ?? payload?.deviceId ?? payload?.sessionId ?? 'unknown').slice(0, 64)
+  const id = clientIdOf(req, payload)
   const now = Date.now()
   const row = clients.get(id) ?? { id, firstSeen: now, requests: 0 }
   row.ip = String(req.socket?.remoteAddress ?? row.ip ?? '')
@@ -168,6 +175,7 @@ async function handleChat(req, res) {
   }
   const text = String(payload.text ?? '')
   const sessionId = String(payload.sessionId ?? 'default')
+  const clientId = clientIdOf(req, payload)
   const chat = await loadChat()
   cors(res)
   res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'connection': 'keep-alive' })
@@ -175,7 +183,7 @@ async function handleChat(req, res) {
   write({ type: 'state', state: 'thinking' })
   let full = ''
   try {
-    for await (const chunk of chat(text, sessionId)) {
+    for await (const chunk of chat(text, { sessionId, clientId })) {
       full += chunk
       write({ type: 'delta', text: chunk })
     }
@@ -200,6 +208,7 @@ function bridgeState(res, req) {
     persona: state.persona,
     roles: state.roles,
     activeRoleId: state.activeRoleId,
+    bindings: state.bindings,
     memory: local ? state.memory : [],
     sessionId: state.sessionId,
     tts: state.tts,

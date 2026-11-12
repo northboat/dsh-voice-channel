@@ -6,13 +6,14 @@
 
 ## 状态
 
-阶段 1 插件已可用（`plugin/`，局域网 `/api/chat` NDJSON + PIN + `/api/asr` + `/api/tts`），阶段 2 Android client 已落地 0.9.0（`android/`，APK 25.61 MiB：**通话模式常驻监听 + 插话打断**、**形象包（`assets/packs/<id>/pack.json`，内置 deepy 四状态多帧 gif，按 emotion 播放，缺失回退程序化鲸鱼）**，录音与断句在手机、ASR 与 TTS 都在插件端），阶段 3 ESP32 未开始。进度、踩坑与已知取舍见 `HANDOFF.md`。
+阶段 1 插件已可用（`plugin/`，局域网 `/api/chat` NDJSON + PIN + `/api/asr` + `/api/tts`，支持多角色与**按设备绑定角色**，管理页把当前角色标为「默认角色」），阶段 2 Android client 已落地 0.10.1（`android/`，APK 25.45 MiB：**通话模式常驻监听 + 插话打断**、**内置形象 Eva**——不画边框，整块屏幕就是她的脸，只有一双 EVE 式发光眼睛，情绪只改眼形 + 外置素材包（导入 zip / 改名 / 删除，素材与背景同色，缺失回退 Eva），录音与断句在手机、ASR 与 TTS 都在插件端），阶段 3 ESP32 未开始。进度、踩坑与已知取舍见 `HANDOFF.md`。
 
 - [技术方案](docs/technical-proposal.md)：选型对比、架构、部署、验证、许可边界
 - [插件服务端](docs/plugin-server.md)：接口、状态文件、音色管理、worker 协议、排障
 - [客户端](docs/app-client.md)：产品原则、页面结构、协议消费、构建与排障
 - [实施清单](TODO.md)：插件 → Android client → ESP32 固件（三阶段），含情绪契约与待决项
 - [Android 开发记录](android/README.md)：ASR 选型对比、构建 / adb 命令、局域网与协议实现细节
+- [本地开发指南](docs/dev-guide.md)：怎么构建装包、改形象、调插件、处理素材（ESP32 一节留白）
 - `archive/`：被推翻的旧方案与历史决策记录
 
 ## 目录
@@ -20,10 +21,12 @@
 | 路径 | 内容 |
 | --- | --- |
 | `docs/technical-proposal.md` | 技术方案（原 README 迁入） |
+| `docs/dev-guide.md` | 本地开发指南：Android / 插件 / ESP32（留白）/ 素材处理 |
 | `TODO.md` | 实施顺序与验收项 |
 | `plugin/` | 插件实现：client 无关服务端，DSH npm/Cordis 包 |
 | `android/` | Android client 实现（独立仓库） |
 | `esp32/` | ESP32 client 实现（Waveshare ESP32-S3-Touch-AMOLED-1.75C） |
+| `assets/` | 素材目录：样本形象包 `deepy/`（4 个动画 WebP）与导入用的 `deepy.zip`，不进 APK |
 | `archive/` | 历史归档 |
 | `dsh-Go/`、`dsh-mobile-apk/`、`xiaozhi-esp32/`、`ESP32-S3-Touch-AMOLED-1.75C/` | 上游检出，仅本地参考；已 ignore 且剥离各自 `.git`，不随本仓库提交 |
 
@@ -51,6 +54,6 @@
 - AGPL-3.0：修改或分发 `dsh-Go` 衍生作品须同许可开源、提供对应源码并标注主仓库与原作者；仅安装官方 APK 自用不触发再发布义务。
 - MIT / Apache-2.0：保留版权、许可与 NOTICE 声明。
 - 语音识别在 PC 侧运行：Python `vosk`（Apache-2.0）与 `vosk-model-small-cn-0.22`（Apache-2.0）由使用者本地拉取（`plugin/.venv`、`plugin/models` 已 gitignore），**不随 APK 分发**；APK 不含任何语音模型，也不包含、不引导安装 `com.google.android.tts`。
-- 品牌与美术素材（DSH Go 名称与标识、Deepy、鲸娘、DeepSeek 图标）不在 AGPL-3.0 授权范围内，仅限构建、测试与本仓库展示，不得用于自行发布的产品；`android/app/src/main/assets/packs/deepy/` 的 4 个 gif 即此类参考素材，随**私有**仓库提交便于直接装包，不对外分发；不冒充官方版本，相关名称与标识归各自权利人。
+- 品牌与美术素材（DSH Go 名称与标识、Deepy、鲸娘、DeepSeek 图标）不在 AGPL-3.0 授权范围内，仅限构建、测试与本仓库展示，不得用于自行发布的产品；`assets/deepy/` 的 4 个动画 WebP 即此类参考素材，随**私有**仓库提交便于直接装包，不对外分发；不冒充官方版本，相关名称与标识归各自权利人。
 - 文中以 `dsh-Go/`、`xiaozhi-esp32/` 等开头的路径引用均指本地上游检出（已 ignore，不随本仓库分发），对应内容见上表仓库链接。
 - 本仓库新增文档与实现代码尚未选定许可证，分发前需明确；`android/` 为独立仓库，许可随其自身。

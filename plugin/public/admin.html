@@ -41,6 +41,7 @@
   .client:last-child { border-bottom:0; }
   .client .id { flex:1; min-width:0; word-break:break-all; }
   .client .meta { color:var(--muted); }
+  .client select { max-width:150px; padding:4px 8px; font-size:12px; }
   .dot { width:8px; height:8px; border-radius:50%; background:#4ade80; flex:0 0 8px; }
   .dot.off { background:var(--muted); }
   .dot.denied { background:#f87171; }
@@ -72,7 +73,7 @@
 
   <section class="card">
     <h2>角色</h2>
-    <p class="hint">可以存多个角色，对话只用「使用中」的那一个；点「编辑」在弹窗里改详情。</p>
+    <p class="hint">可以存多个角色，对话默认用标着「默认角色」的那一个；点「编辑」在弹窗里改详情。</p>
     <div class="roles" id="roles"><div class="hint">读取中…</div></div>
     <div class="row">
       <button id="newRole">新增角色</button>
@@ -121,7 +122,7 @@
 
   <section class="card">
     <h2>在线设备</h2>
-    <p class="hint">最近 5 分钟内连过的设备。</p>
+    <p class="hint">最近 5 分钟内连过的设备。每台设备一个角色，没选过的就是默认角色，选过就固定下来。</p>
     <div id="clients"><div class="hint">读取中…</div></div>
     <div class="row">
       <button id="refreshClients">刷新</button>
@@ -148,7 +149,7 @@
   <textarea id="rolePersona" spellcheck="false" placeholder="例如：你叫马飞飞，是一只可爱的肥鲸鱼……"></textarea>
   <div class="row">
     <button id="roleSave">保存</button>
-    <button class="ghost" id="roleUse">设为使用中</button>
+    <button class="ghost" id="roleUse">设为默认角色</button>
     <button class="danger" id="roleDelete">删除</button>
     <button class="ghost" id="roleClose">取消</button>
     <span class="status" id="roleStatus"></span>
@@ -164,6 +165,7 @@ function setStatus(text, id = 'status') {
 }
 
 let roleBook = { roles: [], activeRoleId: null }
+let bindings = {}
 let pinSaved = ''
 
 function applyRoles(data) {
@@ -179,6 +181,7 @@ async function load() {
   if (!res.ok) throw new Error(await res.text())
   const data = await res.json()
   applyRoles(data)
+  bindings = data.bindings && typeof data.bindings === 'object' ? data.bindings : {}
   pinSaved = data.pin ?? ''
   $('pin').value = pinSaved
   $('pin').placeholder = pinSaved ? '' : '重载 Desktop 后可见'
@@ -219,6 +222,7 @@ async function save(statusId, payload) {
   if (data.pin) { pinSaved = data.pin; $('pin').value = pinSaved }
   if (data.tts) applyTts(data.tts)
   if (data.roles) applyRoles(data)
+  if (data.bindings) bindings = data.bindings
   setStatus('已保存', statusId)
 }
 
@@ -369,13 +373,31 @@ async function loadClients(announce) {
       meta.className = 'meta'
       const auth = row.auth === 'denied' ? '未通过校验' : '已授权'
       meta.textContent = `${auth} · 最近 ${timeOf(row.lastSeen)}${row.requests > 1 ? ` · ${row.requests} 次` : ''}`
-      line.append(dot, id, meta)
+      line.append(dot, id, meta, roleSelect(row.id))
       box.append(line)
     }
   } catch (error) {
     box.textContent = String(error.message).includes('404') ? '需重载 Desktop 后可用' : `读取失败：${error.message}`
     if (announce) setStatus('刷新失败', 'clientStatus')
   }
+}
+
+/** 每台设备的角色下拉：默认显示当前角色，选谁就绑定谁（改动即存）。 */
+function roleSelect(clientId) {
+  const select = document.createElement('select')
+  select.title = '这台设备用哪个角色'
+  for (const role of roleBook.roles) {
+    select.append(new Option(role.name || '未命名', role.id))
+  }
+  select.value = bindings[clientId] ?? roleBook.activeRoleId ?? roleBook.roles[0]?.id ?? ''
+  select.onchange = () => {
+    bindings = { ...bindings, [clientId]: select.value }
+    save('clientStatus', { bindings }).catch((error) => {
+      setStatus(`绑定失败：${error.message}`, 'clientStatus')
+      load().catch(() => {})
+    })
+  }
+  return select
 }
 
 $('refreshClients').onclick = () => loadClients(true)
@@ -409,7 +431,7 @@ function renderRoles() {
     if (active) {
       const badge = document.createElement('span')
       badge.className = 'badge'
-      badge.textContent = '使用中'
+      badge.textContent = '默认角色'
       name.append(badge)
     }
     const preview = document.createElement('div')
@@ -420,7 +442,7 @@ function renderRoles() {
     ops.className = 'ops'
     if (!active) {
       const use = document.createElement('button')
-      use.textContent = '启用'
+      use.textContent = '设为默认角色'
       use.onclick = () => activateRole(role.id)
       ops.append(use)
     }
@@ -439,7 +461,7 @@ function pushRoles(roles, activeRoleId, statusId, text) {
 }
 
 function activateRole(roleId) {
-  pushRoles(roleBook.roles, roleId, 'status', '已切换').catch((error) => setStatus(`失败：${error.message}`, 'status'))
+  pushRoles(roleBook.roles, roleId, 'status', '已设为默认角色').catch((error) => setStatus(`失败：${error.message}`, 'status'))
 }
 
 function openRole(roleId) {
@@ -474,7 +496,7 @@ $('roleSave').onclick = async () => {
   const roles = exists
     ? roleBook.roles.map((role) => (role.id === editingRole.id ? { ...role, ...draft } : role))
     : [...roleBook.roles, { ...editingRole, ...draft }]
-  // 新增的角色直接切为使用中，省一次点「启用」。
+  // 新增的角色直接设为默认角色，省一次点「设为默认角色」。
   const activeRoleId = exists ? roleBook.activeRoleId : editingRole.id
   try {
     await pushRoles(roles, activeRoleId, 'status', exists ? '已保存' : '已新增')
@@ -488,7 +510,7 @@ $('roleUse').onclick = async () => {
   if (!editingRole) return
   const roles = roleBook.roles.map((role) => (role.id === editingRole.id ? { ...role, ...draftOf() } : role))
   try {
-    await pushRoles(roles, editingRole.id, 'status', '已切换')
+    await pushRoles(roles, editingRole.id, 'status', '已设为默认角色')
     $('roleDialog').close()
   } catch (error) {
     setStatus(`失败：${error.message}`, 'roleStatus')

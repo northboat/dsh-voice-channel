@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "id": "deepy",
+  "name": "Deepy",
+  "author": "local",
+  "license": "private-repo-only",
+  "note": "参考素材（来源 dsh-Go 桌宠），已抠掉卡片底板与底部说明文字、只留角色（224×224 逐帧裁切）；随本仓库提交仅供本机与私有仓库使用，不对外分发；缺文件时回退内置 Eva。",
+  "states": {
+    "idle": "notification.webp",
+    "notification": "notification.webp",
+    "happy": "happy.webp",
+    "sleeping": "sleeping.webp",
+    "typing": "typing.webp"
+  },
+  "emotions": {
+    "neutral": "idle",
+    "happy": "happy",
+    "sad": "notification",
+    "angry": "notification",
+    "surprised": "notification",
+    "thinking": "typing",
+    "sleepy": "sleeping",
+    "error": "notification"
+  },
+  "fallback": "idle"
+}

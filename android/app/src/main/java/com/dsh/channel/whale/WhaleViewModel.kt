@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
 
 enum class Emotion(val key: String) {
     NEUTRAL("neutral"),
@@ -42,7 +43,7 @@ data class UiState(
     val phase: Phase = Phase.IDLE,
     val emotion: Emotion = Emotion.NEUTRAL,
     val subtitle: String = "",
-    val status: String = "轻触鲸鱼开始通话",
+    val status: String = "轻触开始通话",
     /** 是否处于通话（麦克风常驻打开，可随时插话）。 */
     val callActive: Boolean = false,
     val showSettings: Boolean = false,
@@ -55,9 +56,15 @@ data class UiState(
     val message: String? = null,
     /** assets/packs 里扫到的形象包。 */
     val packs: List<AvatarPack> = emptyList(),
-    /** 当前形象包 id；空 = 内置程序化鲸鱼。 */
+    /** 当前形象包 id；空 = 内置 Eva。 */
     val packId: String = "",
-)
+    /** 页面背景色：取当前素材的底色，素材和背景同色才融得进去。 */
+    val tint: Int = DEFAULT_TINT,
+) {
+    companion object {
+        const val DEFAULT_TINT = 0xFF0B1020.toInt()
+    }
+}
 
 /**
  * 通话状态机：常驻监听 → 一句话识别 → 插件 NDJSON → 字幕 / 情绪 → 朗读。
@@ -72,6 +79,17 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
     private val client = PluginClient(store)
     private val discovery = LanDiscovery()
     private var chatJob: Job? = null
+
+    /**
+     * 麦克风开关必须离开主线程。
+     *
+     * `CallSpeechInput.start()` 里要切音频模式、开 `AudioRecord`、再采 5 帧判断这个采集源是否
+     * 可用（最坏 500 ms），`stop()` 还要 join 工作线程；直接在点击回调里跑，就是「点了半天
+     * 才有反应」。单线程队列保证 start/stop 不会交叉执行。
+     */
+    private val speechWorker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "speech-lifecycle").apply { isDaemon = true }
+    }
 
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -96,7 +114,7 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
     init {
         val packs = AvatarPacks.load(getApplication())
         // 没选过形象时直接用扫到的第一个包：装机后默认就该是包里的动态形象，
-        // 否则新用户看到的永远是内置 Canvas 鲸鱼，和形象包没关系。
+        // 否则新用户看到的永远是内置 Eva，和形象包没关系。
         val packId = if (store.packChosen) store.packId else packs.firstOrNull()?.id.orEmpty()
         _ui.update {
             it.copy(
@@ -106,12 +124,23 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
                 packs = packs,
             )
         }
+        viewModelScope.launch { refreshTint(packId) }
     }
 
-    /** 切换形象包；空字符串回到内置程序化鲸鱼。 */
+    /** 切换形象包；空字符串回到内置 Eva。 */
     fun selectPack(id: String) {
         store.packId = id
         _ui.update { it.copy(packId = id) }
+        viewModelScope.launch { refreshTint(id) }
+    }
+
+    /** 取素材底色当页面背景；没有素材（内置 Eva）时回到主题色。 */
+    private suspend fun refreshTint(packId: String) {
+        val pack = AvatarPacks.find(_ui.value.packs, packId)
+        val tint = withContext(Dispatchers.IO) {
+            pack?.let { AvatarPacks.tintOf(it) }
+        } ?: UiState.DEFAULT_TINT
+        _ui.update { it.copy(tint = tint) }
     }
 
     /** 导入 zip 形象包：校验 pack.json → 落到 filesDir/packs/<id> → 立即切过去。 */
@@ -128,6 +157,7 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
                     _ui.update {
                         it.copy(packs = packs, packId = pack.id, message = "已导入「${pack.name}」")
                     }
+                    refreshTint(pack.id)
                 },
                 onFailure = { error ->
                     _ui.update { it.copy(message = error.message ?: "导入失败") }
@@ -136,13 +166,9 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 删除导入的形象包；正在用时回退到内置鲸鱼。 */
+    /** 删除素材包（含随包素材）；正在用时回退到内置 Eva。 */
     fun deletePack(id: String) {
         val pack = _ui.value.packs.firstOrNull { it.id == id } ?: return
-        if (!pack.imported) {
-            _ui.update { it.copy(message = "内置形象不能删除") }
-            return
-        }
         viewModelScope.launch {
             val removed = runCatching {
                 withContext(Dispatchers.IO) { AvatarPacks.delete(pack) }
@@ -156,6 +182,24 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
             store.packId = nextId
             _ui.update {
                 it.copy(packs = packs, packId = nextId, message = "已删除「${pack.name}」")
+            }
+            refreshTint(nextId)
+        }
+    }
+
+    /** 重命名素材包（只改显示名，目录 id 不变，当前选中状态不受影响）。 */
+    fun renamePack(id: String, name: String) {
+        val pack = _ui.value.packs.firstOrNull { it.id == id } ?: return
+        viewModelScope.launch {
+            val renamed = runCatching {
+                withContext(Dispatchers.IO) { AvatarPacks.rename(pack, name) }
+            }.getOrNull()
+            if (renamed == null) {
+                _ui.update { it.copy(message = "改名失败，名字不能为空") }
+                return@launch
+            }
+            _ui.update {
+                it.copy(packs = AvatarPacks.load(getApplication()), message = "已改名为「${renamed.name}」")
             }
         }
     }
@@ -186,11 +230,12 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
                 message = null,
             )
         }
-        speech.start()
+        // UI 先切到「在听你说…」，麦克风在后台线程慢慢开，点击不会有卡顿。
+        speechWorker.execute { runCatching { speech.start() } }
     }
 
-    private fun endCall(status: String = "轻触鲸鱼开始通话") {
-        speech.stop()
+    private fun endCall(status: String = "轻触开始通话") {
+        speechWorker.execute { runCatching { speech.stop() } }
         chatJob?.cancel()
         chatJob = null
         tts.stop()
@@ -248,7 +293,7 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
                 phase = Phase.THINKING,
                 emotion = Emotion.THINKING,
                 subtitle = "你：$text",
-                status = "小鲸鱼正在想…",
+                status = "Eva 正在想…",
                 message = null,
             )
         }
@@ -260,7 +305,7 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
                 when (event) {
                     is PluginClient.Event.Delta -> {
                         reply.append(event.text)
-                        _ui.update { it.copy(subtitle = "鲸鱼：$reply") }
+                        _ui.update { it.copy(subtitle = "Eva：$reply") }
                     }
                     is PluginClient.Event.Mood ->
                         _ui.update { it.copy(emotion = Emotion.parse(event.emotion)) }
@@ -268,9 +313,9 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
                         val full = event.text.ifBlank { reply.toString() }
                         _ui.update {
                             it.copy(
-                                subtitle = if (full.isBlank()) "鲸鱼：…" else "鲸鱼：$full",
+                                subtitle = if (full.isBlank()) "Eva：…" else "Eva：$full",
                                 phase = Phase.SPEAKING,
-                                status = "小鲸鱼在说话…（随口插话就能打断）",
+                                status = "Eva 在说话…（随口插话就能打断）",
                             )
                         }
                         tts.speak(full)
@@ -290,7 +335,7 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update {
             when {
                 !it.callActive && it.phase == Phase.SPEAKING ->
-                    it.copy(phase = Phase.IDLE, status = "轻触鲸鱼开始通话")
+                    it.copy(phase = Phase.IDLE, status = "轻触开始通话")
                 it.callActive && it.phase == Phase.SPEAKING ->
                     it.copy(phase = Phase.LISTENING, status = "在听你说…")
                 else -> it
@@ -374,7 +419,8 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         chatJob?.cancel()
-        speech.close()
+        speechWorker.execute { runCatching { speech.close() } }
+        speechWorker.shutdown()
         tts.shutdown()
         super.onCleared()
     }

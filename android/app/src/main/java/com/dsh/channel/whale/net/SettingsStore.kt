@@ -15,12 +15,12 @@ class SettingsStore(context: Context) {
         get() = prefs.getString("pin", "") ?: ""
         set(value) = prefs.edit().putString("pin", value.trim()).apply()
 
-    /** 当前形象包 id；空字符串 = 内置程序化鲸鱼。 */
+    /** 当前形象包 id；空字符串 = 内置 Eva。 */
     var packId: String
         get() = prefs.getString("packId", "") ?: ""
         set(value) = prefs.edit().putString("packId", value).apply()
 
-    /** 用户手动选过形象没有；没选过时默认用扫到的第一个包，而不是内置鲸鱼。 */
+    /** 用户手动选过形象没有；没选过时默认用扫到的第一个包，而不是内置 Eva。 */
     val packChosen: Boolean get() = prefs.contains("packId")
 
     val deviceId: String by lazy {

@@ -35,12 +35,13 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `plugin/data/state.json` | `persona`（角色定义）、`sessionId`、`pin`、`tts { voice, rate, pitch }` |
+| `plugin/data/state.json` | `roles[]` + `activeRoleId`（管理页显示为「默认角色」）、`bindings { clientId: roleId }`（按设备绑角色，最多 100 条）、`persona`（兼容旧字段）、`sessionId`、`pin`、`tts { voice, rate, pitch }` |
 | `plugin/data/memory.log` | JSONL，每行 `{ time, role, text }`，全量保留 |
 
 - `state.json` 由 `lib/state.js` 读写，`normalizeTts()` 做校验：`voice` 白名单 `[A-Za-z0-9._-]{3,64}`、`rate` −50..100 %、`pitch` −50..50 Hz，非法值回默认。
 - 默认音色 `zh-CN-XiaoxiaoNeural`，`rate 0` / `pitch 0`。
 - 记忆只注入最近 20 条（`INJECT_MEMORY`），走 `systemPrompt.section`，不拼进用户消息。
+- 角色按设备取：`roleIdForClient()` 先看 `bindings[device-id]`，没有就用 `activeRoleId`（管理页角标「默认角色」）；角色被删后失效绑定由 `normalizeBindings()` 清掉。
 
 ## 4. 音色管理
 

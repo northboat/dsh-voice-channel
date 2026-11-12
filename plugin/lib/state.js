@@ -77,9 +77,51 @@ function activeOf(roles, wanted) {
   return roles.some((role) => role.id === wanted) ? String(wanted) : roles[0].id
 }
 
+export const MAX_BINDINGS = 100
+
+/** clientId → roleId；角色删掉了、id 超长的绑定直接丢掉。 */
+export function normalizeBindings(value, roles) {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const ids = new Set(roles.map((role) => role.id))
+  const out = {}
+  let count = 0
+  for (const [key, roleId] of Object.entries(raw)) {
+    if (count >= MAX_BINDINGS) break
+    const client = String(key ?? '').trim().slice(0, 64)
+    if (!client || !ids.has(String(roleId))) continue
+    out[client] = String(roleId)
+    count += 1
+  }
+  return out
+}
+
+/** 这台设备绑定的角色；没绑过就用「默认角色」。 */
+export function roleIdForClient(state, clientId) {
+  const wanted = String(clientId ?? '').trim()
+  const bound = wanted ? state.bindings?.[wanted] : null
+  if (bound && state.roles.some((role) => role.id === bound)) return bound
+  return state.activeRoleId
+}
+
+/** 这台设备该用的角色定义文本。 */
+export function personaForClient(state, clientId) {
+  const id = roleIdForClient(state, clientId)
+  const role = state.roles.find((item) => item.id === id) ?? state.roles[0]
+  return role?.persona ?? state.persona ?? DEFAULT_PERSONA
+}
+
 function defaults() {
   const roles = normalizeRoles([], DEFAULT_PERSONA)
-  return { roles, activeRoleId: roles[0].id, persona: DEFAULT_PERSONA, memory: [], sessionId: null, pin: randomPin(), tts: DEFAULT_TTS }
+  return {
+    roles,
+    activeRoleId: roles[0].id,
+    persona: DEFAULT_PERSONA,
+    bindings: {},
+    memory: [],
+    sessionId: null,
+    pin: randomPin(),
+    tts: DEFAULT_TTS,
+  }
 }
 
 // memory.log 是 JSONL：每行 {time, role, text}，全量保留；注入 prompt 时只取最近 INJECT_MEMORY 条。
@@ -124,6 +166,7 @@ export function readState() {
     roles,
     activeRoleId,
     persona: roles.find((role) => role.id === activeRoleId).persona,
+    bindings: normalizeBindings(raw.bindings, roles),
     memory,
     sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : null,
     pin: validPin(raw.pin) ? String(raw.pin) : randomPin(),
@@ -149,6 +192,7 @@ export function writeState(state) {
     persona: roles.find((role) => role.id === activeRoleId).persona,
     roles,
     activeRoleId,
+    bindings: normalizeBindings(state.bindings, roles),
     sessionId: state.sessionId ?? null,
     pin: validPin(state.pin) ? String(state.pin) : randomPin(),
     tts: normalizeTts(state.tts),
@@ -172,6 +216,12 @@ export function patchState(current, payload) {
   if (typeof payload.persona === 'string') {
     next.roles = next.roles.map((role) => (role.id === next.activeRoleId ? { ...role, persona: payload.persona } : role))
   }
+  // bindings 整表替换：管理页每次提交完整的「设备 → 角色」表。
+  if (payload.bindings && typeof payload.bindings === 'object' && !Array.isArray(payload.bindings)) {
+    next.bindings = normalizeBindings(payload.bindings, next.roles)
+  }
+  // roles 可能刚删过，绑定里引用的角色要顺手清掉。
+  next.bindings = normalizeBindings(next.bindings, next.roles)
   return next
 }
 

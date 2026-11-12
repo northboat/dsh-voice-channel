@@ -62,6 +62,7 @@ class MainActivity : ComponentActivity() {
                     onPack = vm::selectPack,
                     onImport = { pickPack.launch(arrayOf("*/*")) },
                     onDeletePack = vm::deletePack,
+                    onRenamePack = vm::renamePack,
                 )
             }
         }

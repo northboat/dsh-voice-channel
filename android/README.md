@@ -2,9 +2,9 @@
 
 阶段 2 的 Android client：点进去只有一只鲸鱼、没有输入框，纯语音与局域网插件对话。
 
-当前版本 **0.9.0**（`versionCode 9`）。架构：**手机只做「常驻录音 + 断句 + 播放」**，ASR 与 TTS 都在插件端；client 只发文本，音色 / 语速由服务端固定，本机既不初始化系统 TTS，也不带任何音色配置。APK **25.61 MiB**。
+当前版本 **0.10.1**（`versionCode 11`）。架构：**手机只做「常驻录音 + 断句 + 播放」**，ASR 与 TTS 都在插件端；client 只发文本，音色 / 语速由服务端固定，本机既不初始化系统 TTS，也不带任何音色配置。debug APK **25.45 MiB**。
 
-0.6.0 之前是「点一下说一句」的对讲机形态；0.7.0 改为**通话模式**：点一下进入通话后麦克风常驻打开，说完自动回到听，鲸鱼朗读时**直接开口就能打断**，不需要任何按钮。0.8.0 主页形象改成**可换的资源包**，按 emotion 播放 gif；0.9.0 修好「素材其实只有 1 帧 + `start()` 时机不对」导致形象不动的问题，内置 deepy 四状态多帧动画并随仓库提交。界面文案在 0.6.0 收敛过一次（设置页只留「地址 + 配对码 + 连接状态」），技术细节在 [`docs/app-client.md`](../docs/app-client.md)。
+0.6.0 之前是「点一下说一句」的对讲机形态；0.7.0 改为**通话模式**：点一下进入通话后麦克风常驻打开，说完自动回到听，鲸鱼朗读时**直接开口就能打断**，不需要任何按钮。0.8.0 主页形象改成**可换的资源包**；0.9.0 修好「素材只有 1 帧 + `start()` 时机不对」导致形象不动的问题；0.10.0 内置形象换成线条 Eva，素材改成可拆装（导入 / 改名 / 删除 / 恢复内置），deepy 的卡片底板在素材层面抠掉、页面背景跟随素材底色。0.10.1 之后又收敛了一轮：**Eva 不再画头框、脖子、嘴巴和光晕，只留一双发光的眼睛，主页形象铺满整块屏幕**（见 3.10）。界面文案在 0.6.0 收敛过一次（设置页只留「地址 + 配对码 + 连接状态」），技术细节在 [`docs/app-client.md`](../docs/app-client.md)。
 
 本文记录设计取舍、可复现命令和实现细节。整体路线见根目录 `TODO.md` / `HANDOFF.md`，插件侧见 `plugin/`。
 
@@ -317,7 +317,7 @@ Get-FileHash $dst -Algorithm SHA256   # 3AF8B0E7…B14BA
 | `ui/WhaleScreen.kt` | 主屏；`MicGlyph` 用 Canvas 自绘，避免扩展图标库 |
 | `ui/SettingsSheet.kt` | 设置弹窗：地址 / 配对码 / 搜索 / 连接状态（不写技术说明） |
 | `ui/AvatarPack.kt` | 形象包扫描与解析（`assets/packs/<id>/pack.json`） |
-| `ui/WhaleAvatar.kt` | 按情绪取包内动画，缺失回退程序化鲸鱼 |
+| `ui/WhaleAvatar.kt` | 按情绪取包内动画；无素材时画内置 Eva（全屏发光眼） |
 
 插件侧新增：
 
@@ -496,7 +496,12 @@ device-id: <SharedPreferences 里的稳定 UUID>
 
 ### 3.10 情绪资源（合规）
 
-形象改成**资源包**：一个目录一个包，`assets/packs/<id>/pack.json` 声明映射，同目录放动画文件（gif / webp，用系统 `ImageDecoder` 解码，多帧 gif 得到 `AnimatedImageDrawable`）。
+形象分两条路：**内置 Eva**（代码画，零素材）和**素材包**（一个目录一个包，`pack.json` 声明映射，同目录放 gif / webp 动画，用系统 `ImageDecoder` 解码）。
+
+- 内置 `BuiltInEva`：**不画边框**——屏幕本身就是她的脸，只有一双 EVE 式的发光眼睛（没有嘴）。眼睛用 `bar()` 四层同形叠加冒充 blur（`EvaEyeHalo` α0.09 → `EvaEyeRim` α0.22 → `EvaEyeMid` → `EvaEyeCore` α0.38），`arcEye()` 画笑眼、`cross()` 画 error；情绪只改眼形（neutral 圆润光斑 / happy 上弯弧 / sad / angry / surprised / thinking / sleepy / error），说话与聆听时下方浮出声波。不依赖任何文件，素材删光也不会白屏。
+- **形象铺满整屏**（`ui/WhaleScreen.kt`）：形象是根 `Box` 的第一层 `Modifier.fillMaxSize()`，字幕与通话按钮用 `align(BottomCenter) + bottom 152dp` 浮在脸上，不再用 `Modifier.size(260.dp)` 那种固定方框——否则「按屏幕比例铺开」全部失真。当前比例：眼距 ±0.205w、眼长 0.25w、眼高 0.10w、眼线在 0.40h。
+- 素材是**完全外置**的：APK 里没有任何素材文件，只能从「导入素材」选 zip 添加，落到 `filesDir/packs/<id>/`；之后可以改名、同 id 覆盖导入、删除。样本包在 `assets/deepy/`（打好的 `deepy.zip` 也在 `assets/`），推到手机 `Download/` 即可导入。
+- 背景跟随素材：`AvatarPacks.tintOf()` 取素材首帧边缘平均色作页面纯色背景（透明底素材返回 null 用主题色）。**这条路径别加渐变**，渐变会让素材四边重新显出轮廓。
 
 ```json
 {
@@ -504,11 +509,11 @@ device-id: <SharedPreferences 里的稳定 UUID>
   "id": "deepy",
   "name": "Deepy",                  // 设置页显示名
   "states": {                       // 动画名 → 文件
-    "idle": "notification.gif",
-    "notification": "notification.gif",
-    "happy": "happy.gif",
-    "sleeping": "sleeping.gif",
-    "typing": "typing.gif"
+    "idle": "notification.webp",
+    "notification": "notification.webp",
+    "happy": "happy.webp",
+    "sleeping": "sleeping.webp",
+    "typing": "typing.webp"
   },
   "emotions": {                     // 情绪 → 动画
     "neutral": "idle",
@@ -522,19 +527,24 @@ device-id: <SharedPreferences 里的稳定 UUID>
 
 - `states` 是「动画名 → 文件名」，省略则按 `<动画名>.gif` 猜；
 - `emotions` 是「情绪 key → 动画名」，情绪枚举见 `Emotion`（neutral / happy / sad / angry / surprised / thinking / sleepy / error）；
-- 解析链：情绪 → 动画 → 文件 → 包内 `fallback` → **内置程序化鲸鱼**。任何一环缺失都不会白屏。
-- 设置页「形象」里列出 `packs/` 下扫到的所有包 + 内置鲸鱼，选择存 `SettingsStore.packId`；`packChosen` 为 false（从没手动选过）时默认用扫到的第一个包。
+- 解析链：情绪 → 动画 → 文件 → 包内 `fallback` → **内置 Eva**。任何一环缺失都不会白屏。
+- 设置页「形象」里列出 `filesDir/packs/` 下的所有包 + Eva，选择存 `SettingsStore.packId`；`packChosen` 为 false（从没手动选过）时默认用扫到的第一个包。
+- **素材包播哪一帧不看 `emotion`，看通话阶段**（`ui/WhaleScreen.kt` 的 `packEmotion`）：没通话 → `sleeping`；开始通话 / 聆听 → `happy`；思考 → `typing`；说完 → 先 `notification`（包内 `idle`）2 秒再回 `happy`。内置 Eva 仍按插件下发的 `emotion` 改眼形，两条路互不影响。
+- 样本素材已去掉底部的说明文字并逐帧裁成 **224×224**（动画 WebP，48 / 32 / 64 / 48 帧，合计 54 KB，zip 43 KB）；裁切脚本流程见 `docs/dev-guide.md` 第 4 节。
 
-**多帧 gif 的播放**（`ui/WhaleAvatar.kt`）：
+**动画播放**（`ui/WhaleAvatar.kt`）：
 
 - `ImageDecoder.decodeDrawable` → `AnimatedImageDrawable`，`repeatCount` 强制 `REPEAT_INFINITE`（素材的 NETSCAPE 循环次数可能是 1）；
-- **`start()` 必须放在 `setImageDrawable` 之后**：解码线程里调用时还没有 view callback，`isRunning` 会是 true 但画面不动，表现为「有图但静止」；
-- 不用 Coil：它的解码器链先命中位图解码器，多帧 gif 只解出第一帧（显式挂 `decoderFactory` 也没绕过去）；
-- 多帧素材不要再叠缩放 / 位移动画，否则整张卡片跟着抖；换情绪时保留上一张直到新图解码完，避免闪空。
+- 画面用 Compose `Canvas` 直接画 drawable（不再用 `ImageView`）：View 层绘制在 Compose 之上，边缘羽化/同色融合都盖不住它，看起来像贴图；
+- 没有 View 就没人 invalidate，需要自建 `Drawable.Callback`（`invalidateDrawable` 里自增一个 state）来推进帧；
+- **`start()` 要在有 callback 之后调用**：解码线程里调用时 `isRunning` 会是 true 但画面不动；
+- 不用 Coil：它的解码器链先命中位图解码器，多帧 gif 只解出第一帧（显式挂 `decoderFactory` 也没绕过去）。
+
+**素材去底板**（`android/tools/strip-avatar-bg.py`）：deepy 的卡片底板是在素材层面抠掉的——逐帧把 `#0D1117` / `#181D29` 一类的底色置为透明，输出带 alpha 的动画 WebP（4 个文件合计约 66 KB，原 GIF 374 KB）。依赖 Pillow：`python -m venv .venv-tools && .venv-tools/Scripts/pip install pillow`，然后 `python android/tools/strip-avatar-bg.py <素材目录> <输出目录>`。
 
 之所以废除旧的 `<key>-zh-dark.gif` 命名约定：不同素材的帧率、画布尺寸、留白都不一样，硬编码后缀没法适配，交给打包者在 `pack.json` 里声明最省事。
 
-**素材许可**：`dsh-Go/ASSETS.md:3,19` 明确美术素材不在 AGPL-3.0 范围内，仅限其仓库构建 / 测试 / 展示。本仓库的 `assets/packs/deepy/`（4 个 gif：`notification` 32 帧 / `happy` 52 帧 / `sleeping` 64 帧 / `typing` 48 帧，336×352）是自身参考用素材，随**私有**仓库提交以便直接装包，`pack.json` 标 `license: private-repo-only`，不对外分发、不用于发布的产品。
+**素材许可**：`dsh-Go/ASSETS.md:3,19` 明确美术素材不在 AGPL-3.0 范围内，仅限其仓库构建 / 测试 / 展示。`assets/deepy/`（4 个动画 WebP：`notification` 32 帧 / `happy` 48 帧 / `sleeping` 64 帧 / `typing` 48 帧，224×224，已裁掉底部中文说明）是样本素材，**不随 APK 分发**，只作为导入 zip 的示例放在仓库里；`pack.json` 标 `license: private-repo-only`，不对外分发、不用于发布的产品。
 
 ### 3.11 包可见性与体积约束
 
@@ -550,10 +560,10 @@ device-id: <SharedPreferences 里的稳定 UUID>
 
 | 项 | 值 |
 | --- | --- |
-| 包名 / 版本 | `com.dsh.channel.whale` / `0.9.0`（code 9） |
+| 包名 / 版本 | `com.dsh.channel.whale` / `0.10.1`（code 11） |
 | SDK | minSdk 28 / targetSdk 34 / compileSdk 35 |
-| APK | 26,851,993 B（**25.61 MiB**） |
-| 资产 | `assets/packs/deepy/`（`pack.json` + `notification.gif` / `happy.gif` / `sleeping.gif` / `typing.gif`，多帧动图，**随仓库提交**） |
+| APK | release 26,515,676 B（**25.29 MiB**）；形象改版后 `:app:assembleDebug` 为 26,691,658 B（25.45 MiB） |
+| 资产 | 无（APK 只带内置 Eva）；样本素材与导入包在仓库根 `assets/` |
 | 原生库 | 无 |
 
 **PC 侧 ASR**（0.3.0 起未变）
