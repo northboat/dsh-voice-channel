@@ -1,6 +1,6 @@
 // /api/tts 的共用实现：插件内路由（8787）与独立调试服务（8788）都走这里。
 
-import { readState } from './state.js'
+import { readState, speechForClient } from './state.js'
 import { tts, ttsSettings } from './tts.js'
 import { isLoopback, cors, send } from './asr_http.js'
 
@@ -73,12 +73,14 @@ export async function handleTts(req, res, url) {
   if (!text) { send(res, 400, { error: 'text required' }); return }
   if (text.length > MAX_TEXT) { send(res, 413, { error: `text 超过 ${MAX_TEXT} 字` }); return }
   try {
-    // 请求没带参数就用管理页保存的音色（client 只发 text 时就落在这里）。
-    const settings = ttsSettings()
+    // 请求没带声音参数时按设备找：这台设备绑的角色的音色 / 语速 / 音调优先，
+    // 角色没配的项才回落到全局兜底（client 只发 text，所以基本都走这里）。
+    const clientId = String(req.headers['device-id'] ?? req.headers['x-device-id'] ?? '')
+    const speech = speechForClient(readState(), clientId)
     const result = await tts.synthesize(text, {
-      voice: pick(input.voice, settings.voice),
-      rate: pick(input.rate, settings.rate),
-      pitch: pick(input.pitch, settings.pitch),
+      voice: pick(input.voice, speech.voice),
+      rate: pick(input.rate, speech.rate),
+      pitch: pick(input.pitch, speech.pitch),
       volume: input.volume,
     })
     cors(res)

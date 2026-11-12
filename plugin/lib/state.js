@@ -51,11 +51,18 @@ export function newRoleId() {
   return `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 }
 
-/** 角色列表归一化：补 id、去重复、截断超长字段；空列表回落到一个默认角色。 */
-export function normalizeRoles(value, fallbackPersona) {
+/**
+ * 角色列表归一化：补 id、去重复、截断超长字段；空列表回落到一个默认角色。
+ *
+ * 音色 / 语速 / 音调都是角色的一部分：`voice` 空串表示跟随全局兜底音色，
+ * `rate`/`pitch` 缺省时继承 [fallbackTts]（首次迁移就用老的全局设置）。
+ */
+export function normalizeRoles(value, fallbackPersona, fallbackTts = DEFAULT_TTS) {
   const rows = Array.isArray(value) ? value.slice(0, MAX_ROLES) : []
   const seen = new Set()
   const roles = []
+  const fallbackRate = clampInt(fallbackTts?.rate, -50, 100, DEFAULT_TTS.rate)
+  const fallbackPitch = clampInt(fallbackTts?.pitch, -50, 50, DEFAULT_TTS.pitch)
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue
     let id = String(row.id ?? '').trim().slice(0, 64)
@@ -65,10 +72,20 @@ export function normalizeRoles(value, fallbackPersona) {
       id,
       name: String(row.name ?? '').trim().slice(0, 40) || DEFAULT_ROLE_NAME,
       persona: String(row.persona ?? '').slice(0, MAX_PERSONA),
+      voice: validVoice(row.voice) ? String(row.voice).trim() : '',
+      rate: clampInt(row.rate, -50, 100, fallbackRate),
+      pitch: clampInt(row.pitch, -50, 50, fallbackPitch),
     })
   }
   if (!roles.length) {
-    roles.push({ id: newRoleId(), name: DEFAULT_ROLE_NAME, persona: String(fallbackPersona ?? DEFAULT_PERSONA).slice(0, MAX_PERSONA) })
+    roles.push({
+      id: newRoleId(),
+      name: DEFAULT_ROLE_NAME,
+      persona: String(fallbackPersona ?? DEFAULT_PERSONA).slice(0, MAX_PERSONA),
+      voice: '',
+      rate: fallbackRate,
+      pitch: fallbackPitch,
+    })
   }
   return roles
 }
@@ -101,6 +118,18 @@ export function roleIdForClient(state, clientId) {
   const bound = wanted ? state.bindings?.[wanted] : null
   if (bound && state.roles.some((role) => role.id === bound)) return bound
   return state.activeRoleId
+}
+
+/** 这台设备该用的声音参数（音色 / 语速 / 音调）：角色配了就用角色的，否则用全局兜底。 */
+export function speechForClient(state, clientId) {
+  const id = roleIdForClient(state, clientId)
+  const role = state.roles.find((item) => item.id === id)
+  const voice = String(role?.voice ?? '').trim()
+  return {
+    voice: validVoice(voice) ? voice : state.tts.voice,
+    rate: Number.isFinite(role?.rate) ? role.rate : state.tts.rate,
+    pitch: Number.isFinite(role?.pitch) ? role.pitch : state.tts.pitch,
+  }
 }
 
 /** 这台设备该用的角色定义文本。 */
@@ -160,7 +189,8 @@ export function readState() {
   }
   // 旧版只有一个 persona 字段：首次读到时把它迁成唯一角色。
   const legacyPersona = typeof raw.persona === 'string' ? raw.persona : DEFAULT_PERSONA
-  const roles = normalizeRoles(raw.roles, legacyPersona)
+  const tts = normalizeTts(raw.tts)
+  const roles = normalizeRoles(raw.roles, legacyPersona, tts)
   const activeRoleId = activeOf(roles, raw.activeRoleId)
   const state = {
     roles,
@@ -170,7 +200,7 @@ export function readState() {
     memory,
     sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : null,
     pin: validPin(raw.pin) ? String(raw.pin) : randomPin(),
-    tts: normalizeTts(raw.tts),
+    tts,
   }
   // 首次运行生成 PIN / 清理旧 state.json 里的 memory 字段 / 迁移角色列表。
   if (migrated || !validPin(raw.pin) || Array.isArray(raw.memory) || !Array.isArray(raw.roles)) writeState(state)
@@ -186,7 +216,7 @@ function persistDefaults() {
 export function writeState(state) {
   mkdirSync(DIR, { recursive: true })
   // persona 始终是「当前角色」的文本，chat.js 只读它，不必知道角色的存在。
-  const roles = normalizeRoles(state.roles, String(state.persona ?? DEFAULT_PERSONA))
+  const roles = normalizeRoles(state.roles, String(state.persona ?? DEFAULT_PERSONA), normalizeTts(state.tts))
   const activeRoleId = activeOf(roles, state.activeRoleId)
   writeFileSync(FILE, JSON.stringify({
     persona: roles.find((role) => role.id === activeRoleId).persona,
@@ -207,7 +237,7 @@ export function writeState(state) {
 export function patchState(current, payload) {
   const next = { ...current }
   if (Array.isArray(payload.roles)) {
-    next.roles = normalizeRoles(payload.roles, current.persona)
+    next.roles = normalizeRoles(payload.roles, current.persona, normalizeTts(current.tts))
     const wanted = typeof payload.activeRoleId === 'string' ? payload.activeRoleId : current.activeRoleId
     next.activeRoleId = activeOf(next.roles, wanted)
   } else if (typeof payload.activeRoleId === 'string' && current.roles.some((role) => role.id === payload.activeRoleId)) {

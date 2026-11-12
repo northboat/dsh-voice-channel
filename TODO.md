@@ -4,6 +4,30 @@
 
 实现目录：`plugin/`（插件）、`android/`（Android client）、`esp32/`（ESP32 client）；上游检出目录仅本地参考，不随仓库提交。
 
+## 当前状态（2026-11-12，0.11.0）
+
+**已经能用的**：
+
+- **一条 WS 长连接**（`ws://<host>:8787/xiaozhi/v1/`，**完全照抄小智协议**）：上行 PCM/Opus → 服务端识别 → DSH 会话 → 逐句 TTS → 60 ms PCM/Opus 帧下行，`stt` / `llm.emotion` / `tts start|sentence_start|stop` 全在同一连接。HTTP 三条路由保留给演示页与脚本调试。
+- **流式输出**：服务端按句合成边收边发，手机 `AudioTrack` 边收边播；字幕在 `sentence_start` 时切句，**字随播放头长出来**（`captionChars` ← `playbackHeadPosition` 落在哪句、句内比例），不再是「先打完字再等声音」。
+- **朗读不打断**：说话时照常上行，服务端在连接内串行排队，当前音频播完再播下一句回复。
+- 形象只有内置 **Deepy**（素材随 APK，首次启动复制到 `filesDir`）；插件管理页按设备绑角色、TTS 音色按角色下发。
+- 插件侧新增 `POST /xiaozhi/ota/`：未改固件的小智设备把 OTA 指过来即可直连（缺硬件，未真机验证）。
+
+**验证到哪一步**：插件侧协议用 `node plugin/test/ws_test.mjs`（桩 ASR/TTS）与 `node plugin/test/ws_full.mjs`（真 Vosk + 真 edge-tts + 真 Opus）全绿；
+Android 0.11.0 已装机，真机实测已跑到「音频上行 → ASR → DSH 正常出回复」，只在 TTS 环节报 `合成失败：TTS 超时（30s）`——
+已定位并修复（30 s 硬超时 + 迟到音频导致帧流失步，见 `HANDOFF.md` 末节）。
+**闭环待复测**：需在 Desktop **重载插件**（WS 路由在 `lib/index.js`、`tts.js` 修复在模块级代码里，都不是请求级热加载）；
+重载后直接打 `GET /api/tts?text=你好` 应 12~26 s 返回 mp3，而不是 30 s → 503。`health.tts.requests=0 / lastMs=null` 说明当前跑的还是旧版。
+
+**已知未做**（按优先级）：
+
+1. 真机通话闭环验收（先在 Desktop 重载插件）。
+2. 小智 ESP32 设备真机（协议按固件源码对齐，`/xiaozhi/ota/` 已就绪）。
+3. 模型侧 token 流式：DSH 当前只发整段 `assistant/message`，「边收边播」只能做到「按句合成流水线」；等引擎支持增量事件还能更早出声。
+4. 多设备仍共用一个 DSH 会话（只做到按设备选角色）。
+5. edge-tts 单次请求抖动大（实测 2.4~17 s，worker 重试最坏 ~2×），句间可能空一下；已放宽超时到 90 s、短句合并到 16 字减少请求，要再快可考虑合成并发 2（`tts.synthesize` 目前仍是 Node 串行队列）或本地 TTS 兜底。
+
 ## 约束
 
 - 插件是唯一服务端，**client 形态无关**：PC `dsh web`、手机 APK、ESP32 接同一套协议，换 client 不改插件代码。
@@ -80,6 +104,7 @@
 - **形象库重做 + 设备绑定角色（0.10.1）**：内置形象从程序化鲸鱼换成线条 **Eva**（圆角头框 + 可弯可斜的眼睛 + 脖子线，按情绪改眼形，说话浮出声波，零素材依赖）；素材完全外置（APK 不带素材），只能导入 zip，落到 `filesDir` 后可改名 / 覆盖导入 / 删除（删除前有确认弹窗）；样本包 `assets/deepy.zip` 推到手机 `Download/` 手动导入；deepy 的卡片底板用 `android/tools/strip-avatar-bg.py` 在素材层面抠成透明，输出 4 个透明底动画 WebP（约 66 KB，原 GIF 374 KB）；页面背景取素材首帧边缘均值色做纯色，素材边界消失（**别在这条路径加渐变**）；播放从 `ImageView` 换成 Compose `Canvas` 直绘 + 自建 `Drawable.Callback` 推帧（View 层绘制在 Compose 之上，羽化/同色融合盖不住）。插件侧新增 `bindings`（clientId → roleId），`/api/chat` 按 `device-id` 选角色定义，管理页「在线设备」每行一个角色下拉、改动即存。APK `26,515,676 B`（25.29 MiB）/ `versionCode=11` / `0.10.1`。**限制**：所有设备仍共用一个 DSH 会话，只做到角色按设备区分。
 - **形象收敛成「屏幕即脸」（2026-11-12 迭代，未升版本号）**：Eva 去掉头框、脖子线、腮红、嘴巴与背后的渐变光晕，**只留一双发光的眼睛**——`bar()` 用四层同形叠加冒充 blur（暗蓝辉光 → 边缘光 → 主亮蓝 → 淡白内芯），`arcEye()` 画笑眼，`cross()` 画 error；情绪只靠眼形（neutral 圆润光斑 / happy 上弯弧 / sad ±11° / angry ±16° / surprised 短而高 / thinking 一眼收窄一眼偏侧 / sleepy 压扁 / error 发光 X）。主页把形象从 `Modifier.size(260.dp)` 改成根 `Box` 的第一层 `fillMaxSize()`（字幕与通话按钮 `bottom 152dp` 浮在脸上），尺寸按屏宽比例：眼距 ±0.205w、眼长 0.25w、眼高 0.10w、眼睛在 0.40h。**教训**：比例看着「紧凑」时先查容器尺寸，别在绘制参数里找。素材目录同时从 `android/samples/` 迁到仓库根 `assets/`。管理页角色角标/按钮 `使用中` → `默认角色`，设备下拉不再有「跟随使用中」。debug APK `26,691,658 B`（25.45 MiB）/ `versionCode=11` / `0.10.1`。
 - **素材去文字 + 阶段驱动播放（同日）**：`assets/deepy/` 的 4 个动画 WebP 逐帧裁成 224×224（`x56 y40`），角色保留、底部中文说明整条裁掉，无损重编码后 66 KB → 54 KB，`deepy.zip` 重打包 43 KB；素材包播哪一帧改由**通话阶段**决定（待机 sleeping / 通话中 happy / 思考 typing / 说完 notification 2 s 再回 happy），内置 Eva 仍按 `emotion`；修掉真机两个 bug——双线性过滤导致糊（`setFilterBitmap(false)`）、整屏 `saveLayer` 羽化拖死主线程导致麦克风点不动（删羽化层、素材缩到 86% 屏宽并上移 0.06h）。新增 `docs/dev-guide.md`（Android / 插件 / ESP32 留白 / 素材处理）。追加修掉「点麦克风要等约 1 s」：`CallSpeechInput.start()/stop()` 的音频模式切换、`AudioRecord` 与 `probeHasAudio()`（≤500 ms）全在主线程，改为 ViewModel 单线程 `speechWorker` 串行执行、UI 先切状态；首页同时删掉与底部按钮重复的那行状态文案。
+- **耳机路由 / 两行字幕 / 角色音色 / 健康检查**：通话按 蓝牙→有线→USB→外放 选 `CommunicationDevice`（老系统退回 `isSpeakerphoneOn`）并监听插拔，修掉「戴耳机还是外放」；字幕只保留最新两行（标点处截断 + `maxLines=2`）；插件把音色/语速/音调下放到角色（`roles[].{voice,rate,pitch}`，空的跟随全局），`/api/tts` 按 `device-id` 解析、管理页删掉独立「声音」卡片；管理页接口统一走 `/dsh-voice-channel/{health,voices,tts}`，删掉独立的「运行状态」卡片，改在「在线设备」里放「检查运行状态」按钮——原来 `/api/health` 打到引擎路由回纯文本 `not found`，`res.json()` 抛 `Unexpected token 'o'`。
 - **仓库已推送**：`main` 现包含 `plugin/`、`docs/`、`android/app/` 与 `assets/`（素材样本，不进 APK），最近一次推送是 android 0.9.0（此前只有 `64f8bc9 --story=初始化仓库` 与一次文档提交）；0.10.1 尚在本地。
 
 ## 预留任务 T1：prompt / 角色定义注入优化（省 token）
@@ -103,12 +128,141 @@
 - 已验证（离线断言 + 线上）：同一会话连续 N 轮只发用户原文、前缀不随轮次增长；会话历史不再新增 `[角色定义]/[长期记忆]` 前缀（线上最后一次 `agent/inbox/spliced` 已不含前缀）；改角色下一轮生效；外部编辑 / 新会话 / 重启重载快照，本轮追加不重载；重启复用 `sessionId` 不重复注入；`backend=dsh` 不回归（`probe.promptSection=system`、`promptSectionError` 空）。
 - 待验证（模型链路恢复后）：让模型回复一句话，确认角色定义生效、能回忆「青柠」式跨会话记忆，并对比改造前后请求 prompt token。
 
+## T2 已完成：通信从 HTTP 换成 WebSocket（0.11.0）
+
+> 结论先行：**没有自创协议，直接用 `xiaozhi-esp32` 的 WS 协议**（`hello` / `listen` / `stt` / `llm` / `tts` + 裸二进制音频）。
+> 定稿文档：[`docs/ws-protocol.md`](docs/ws-protocol.md)（已重写为"已实现"版本）。
+
+**实际落地**
+
+| 项 | 结果 |
+| --- | --- |
+| 插件端通道 | `lib/ws.js` 手写 RFC6455（握手/文本/二进制/分片/ping-pong/close），`server.on('upgrade')` 挂 `/xiaozhi/v1`（`/ws` 同名）；`lib/xiaozhi.js` 实现协议会话 |
+| 鉴权 | 握手头 `Authorization: Bearer <PIN>`，LAN 不通过直接 401（不会"连上再踢"）；本机 loopback 免 |
+| 编解码 | 上行 Opus 16k（`opusscript`）、mp3→PCM（`mpg123-decoder`）；**没有守住零依赖**，改为懒加载 + `/api/health` 暴露 `codecs` |
+| 断句 | ESP32 走 `mode=auto`（服务端 VAD，`lib/vad.js`）；Android 走 `mode=manual`（本地 VAD，避开无 AEC 的回声） |
+| 流式下行 | 按句切分 → 每句合成完立刻 `sentence_start` + 60 ms 节奏推帧（合成与播放解耦，句间不留空） |
+| 客户端 | `net/WsSession.kt` 单连接（`PluginClient` 只留探活，`AsrClient` / `TtsClient` / `TtsOutput` 删除） |
+| 播放 | `voice/StreamingPlayer.kt`：`AudioTrack` MODE_STREAM 边收边播 + 字幕按 `playbackHeadPosition` 推进 |
+| OTA | `POST /xiaozhi/ota/` 下发 `websocket.url/token/version`，小智设备免改固件 |
+| 验收 | `plugin/test/ws_test.mjs`（桩）与 `plugin/test/ws_full.mjs`（真 Vosk + 真 edge-tts + 真 Opus）全绿；见 `docs/ws-protocol.md` §10 |
+
+**没做的（当时设想过的）**
+
+- 灰度开关 `SettingsStore.wsEnabled` 与 HTTP 回退：直接切了 WS，HTTP 路由只留给演示页/脚本，客户端不再双栈。
+- ASR 增量上行：仍是「一句整段」，`listen stop` 才识别（Vosk 需要改增量解码）。
+- 请求 `id` 多路分解：不需要了，同一连接内服务端串行。
+
+<details>
+<summary>当时的拆解与论证（保留备查）</summary>
+
+## 预留任务 T2：通信从 HTTP 换成 WebSocket（**必做**）
+
+> 2026-11-12 提出。现在三条链路各发一次 HTTP：`POST /api/asr`（整段 PCM）、`POST /api/chat`（NDJSON 流）、`POST /api/tts`（整段 mp3）。每次都要重新握手 + 带 PIN，打断只能靠取消请求，也无法做真正的流式；阶段 3 的 ESP32 还要再实现一遍同样的三条 HTTP。**越早换越省**，因为协议一旦定稿，PC / 手机 / ESP32 三端可以共用同一套。
+
+**拆解与工作量**
+
+| 项 | 内容 | 估时 |
+| --- | --- | --- |
+| 插件端通道 | `webServer.upgrades` 注册 WS（**保持零依赖**，手写 RFC6455 握手 + 帧解析约 150~200 行，或引入 `ws` 并接受多一个依赖）；首帧 `hello` 带 PIN + 协议版本，之后按 `id` 关联请求 | 0.5 天 |
+| 客户端迁移 | OkHttp `WebSocket` 把 `PluginClient` / `AsrClient` / `TtsClient` 合并成一条连接；连接复用、断线重连、请求 id 与 generation 对齐 | 1 天 |
+| 流式（收益主体） | ASR 边录边发（要改 `lib/asr_worker.py` 的 Vosk 增量解码）；TTS 边收边播（二进制音频帧 + `AudioTrack`，替换现在的「落 mp3 再 `MediaPlayer`」） | 1.5~2 天 |
+
+合计：**只换通道约 1.5 天；含 ASR/TTS 流式约 3~4 天**（不含真机联调）。
+
+**协议**：[`docs/ws-protocol.md`](docs/ws-protocol.md)（v1 草案）——连接与鉴权、`asr`/`chat`/`tts` 三类消息、二进制帧约定、心跳与重连、与 HTTP 的双栈关系、验收清单。开工前先把这份定稿，三端照它实现，别再各自发明。
+
+**实施顺序（建议按此推进，每步都能单独回滚）**
+
+1. **插件侧只加不改**：新增 `lib/ws.js`（手写 RFC6455 握手 + 帧解析 + 连接表），`index.js` 里 `server.on('upgrade')` 挂 `/ws`；业务流程仍调用现有 `chat.js` / `asr.js` / `tts.js`。**这一步需要重载插件**。
+2. **双栈验收**：用 Node 脚本（临时目录，零依赖 `WebSocket` 客户端可手写或 `npm i ws`）跑通 hello → asr → chat → tts，与 HTTP 版结果逐字对比。
+3. **客户端接入**：新增 `net/WsClient.kt`（OkHttp `WebSocket`，单连接 + 请求 `id` + 超时 + 退避重连），`SettingsStore.wsEnabled` 默认关；`PluginClient` / `AsrClient` / `TtsClient` 内部改为「开关打开走 WS、否则走 HTTP」，调用方不动。
+4. **灰度**：设置页加一个隐藏开关（或长按版本号），真机跑通后再默认开；出问题一键退回 HTTP。
+5. **再做流式**：ASR 增量上报（改 `asr_worker.py` 的 Vosk 分段解码）、TTS 边收边播（`AudioStreamBuffer` / `AudioTrack`），这一步才拿延迟收益。
+6. **收尾**：HTTP 路由保留（管理页与演示页还在用），但 README / `docs/plugin-server.md` 的路由表标注「WS 优先、HTTP 兼容」。
+
+**开工前先确认**
+
+- 插件零依赖要不要守：手写 RFC6455 约 150~200 行（只处理文本/二进制、不分片续帧），换来 `package.json` 不变；引入 `ws` 省事但破了「零运行时依赖」的口径。
+- 二进制帧不做多路分解的前提是「一连接同时只一路 ASR / 一路 TTS」，这点要在客户端强制（`busy` 报错）。
+- WS 服务端连接是长驻的，改它必须重载插件；只有 `chat.js` 那类请求级模块能热加载。
+
+**注意**
+
+- WS 只解决连接复用与延迟，**不自动修好「音频乱」**；音频问题要先按播放属性 / 音轨路由单独排查（已给 `MediaPlayer` 指定 `USAGE_MEDIA` + `CONTENT_TYPE_SPEECH`）。
+- 新增路由与协议字段属于 `lib/index.js` 级别改动，**需重载插件**才生效；`chat.js` 才是请求级热加载。
+- PIN 从每请求头改为连接首帧鉴权，LAN 无 PIN 需 401 并断开，别退化成「连上就能发」。
+- 阶段 3 的 ESP32 按同一协议实现，改动时同步更新 `docs/technical-proposal.md` 的协议章节与 `docs/plugin-server.md` 的路由表。
+
+**验收**：一条连接内完成「说话 → 识别 → 回复 → 朗读」；朗读中插话能立刻停声且不重连；拔网/断线后自动重连并继续可用；PC 演示页与手机走同一协议，插件侧不再有每次请求的握手开销。
+
+</details>
+
+## T3 一并做完：兼容 `xiaozhi-esp32` 客户端（0.11.0）
+
+T2 直接采用了小智协议，所以 T3 的主体（Opus 编解码、服务端 VAD、OTA 下发、二进制 v1/v2/v3 拆帧、
+`listen auto/stop`、`abort`、`tts` 三态）已在同一次改动里落地，见 `docs/ws-protocol.md`。
+剩余：**没有硬件做真机验证**；设备侧 OTA 地址（`CONFIG_OTA_URL` / NVS `wifi/ota_url`）要指向本机才能自动接入。
+
+<details>
+<summary>当时的 T3 评估（保留备查）</summary>
+
+## 预留任务 T3：兼容 `xiaozhi-esp32` 客户端（**建议做，排在 T2 之后**）
+
+> 2026-11-12 评估。参考代码在本仓库 `xiaozhi-esp32/`（MIT，仅作协议与客户端行为依据，工具链不混用）。结论：**可以做到「不改设备固件、语音对话完整可用」**，代价是实现一层适配；难点不在 WS，而在 **Opus 编解码 + 服务端断句 + 会话时序**。做完阶段 3 的 ESP32 可以完全省掉协议实现。
+
+**设备真正依赖的（代码实证，别再猜）**
+
+| 环节 | 要求 | 出处 |
+| --- | --- | --- |
+| 握手头 | `Authorization: Bearer <token>`（可空）、`Protocol-Version`、`Device-Id`（MAC）、`Client-Id`（UUID） | `xiaozhi-esp32/main/protocols/websocket_protocol.cc:97-106` |
+| 握手时序 | 设备连上即发 `hello`，**10 s 内**收不到服务端 `hello` 判失败并断开 | 同上 `:187-201` |
+| 服务端 hello | 必须含 `"transport":"websocket"`；`audio_params.sample_rate` / `frame_duration` 决定下行播放参数（可 24000 / 60） | 同上 `:236-263` |
+| 上行音频 | Opus 16 kHz / 单声道 / 60 ms 一帧；协议 v1 裸 Opus，v2/v3 带 `BinaryProtocol2/3` 头 | 同上 `:24-60`，`docs/websocket_zh.md:103-131` |
+| 下行音频 | 二进制帧一律按 **Opus** 解码，采样率取服务端 hello，不一致由设备重采样 | `docs/websocket_zh.md:297-312` |
+| 上行 JSON | `listen`(start/stop/detect)、`abort`(reason) | 同上 `:162-202` |
+| 下行 JSON | `stt`（用户字幕）、`llm.emotion`（表情）、`tts`(start / sentence_start+text / stop) | `application.cc:644-701` |
+| 自动模式断句 | `listen start` 后设备持续推流，**没有「说完」标记**，断句必须服务端做 | `application.cc:1164-1180` |
+| 启动 OTA | `POST /xiaozhi/ota/`（默认 `https://api.tenclass.net/xiaozhi/ota/`，可被 NVS `wifi/ota_url` 覆盖）；失败会重试 10 次（10→512 s 退避），必须返回可解析 JSON | `ota.cc:56-63`、`application.cc:467-554` |
+| OTA 可下发 WS 配置 | 响应里的 `"websocket":{url,token,version}` 会写进设备 NVS —— **不改固件即可把设备指向我们的服务** | `ota.cc:180-199` |
+| 可忽略 | `mcp` / `glyph_push` / `system.reboot` / `custom` / `alert`，不回不影响对话 | `application.cc:702-731` |
+
+**我们的差距**
+
+1. ASR 入口是「整段 PCM `POST /api/asr`」，设备是 Opus 流 → 需 Opus 解码 + 服务端 VAD 断句（手机端 `CallSpeechInput` 的能量 VAD 移植成 JS 即可）。
+2. TTS 出口是 edge-tts 的 **mp3**，设备只认 Opus → 需 mp3→PCM→Opus(24 k / 60 ms) 重编码。
+3. **必须破「零依赖」**：Opus 编解码选 `opusscript`（纯 JS，MIT）或 `@discordjs/opus`（native 预编译）；mp3 解码选 `mpg123-decoder`（wasm）或直接 shell 出 ffmpeg。选定后要改 `package.json` 与文档里「零运行时依赖」的口径。
+4. WS 监听不用另起服务：插件自己的 8787 就是 `http.createServer`（`plugin/lib/index.js:createServer`），加 `server.on('upgrade')` 即可，不依赖 DSH 的 `webServer`。
+
+**工作量**
+
+| 项 | 估时 |
+| --- | --- |
+| WS 服务器 + xiaozhi 二进制协议 v1/v2/v3 + hello/时序/心跳 | 1 天 |
+| Opus 上下行打通（16 k 解码 / 24 k 编码 / 60 ms 分帧 / 重采样） | 1 天 |
+| 服务端 VAD 断句（JS 版） | 0.5 天 |
+| TTS 链路 mp3 → PCM → Opus | 0.5~1 天 |
+| OTA 空实现（返回 `{}` 或带 `websocket` 配置）+ 真机联调 | 1 天 |
+
+合计约 **4 天**；若 T2 的 WS 基础设施已就绪，兼容层增量约 **2.5~3 天**。
+
+**注意**
+
+- 设备出厂默认连官方云（OTA 与 WS 都指向 tenclass），自建必须先把 `wifi/ota_url`（NVS 或编译期 `CONFIG_OTA_URL`）指到我们这里，否则设备会被官方响应重新指走。
+- 固件版本差异：`version` 只存在设备侧 NVS（服务端 hello 不下发），要按 v1/v2/v3 都能解析；`glyph_push`/`text_font` 直接忽略。
+- 多设备仍共用一个 DSH 会话，按 `Device-Id`（MAC）走现有 `bindings` 选角色。
+- 与 T2 共用同一套 WS / 帧 / 重采样基础设施，别写成两套。
+
+**验收**：一台未改固件的 xiaozhi 设备（固件把 OTA 指到本机）能 说一句 → 设备显示 `stt` 字幕 → 听到朗读并看到 `llm.emotion` 表情 → 自动回到聆听；`abort`（唤醒/打断）能立刻停声；长挂 30 min 不断连。
+
+</details>
+
 ## 2. Android 应用（插件 client 端）
 
-- [ ] 独立 Android client APK：连插件 WS，麦克风采集、音频播放，按 `emotion` 查本地映射表展示 gif。
-- [ ] 复用阶段 1 协议与同一个插件实例，验证「换 client 不改插件」。
-- [ ] 效果实测：首字延迟、音频连续性、形象帧率、后台/锁屏保活、功耗。
-- [ ] 抽出可移植 client 层：音频编解码、状态机、`emotion → 动画 key` 映射表与协议编解码，供阶段 3 复用。
+- [x] 独立 Android client APK：连插件 WS，麦克风采集、音频播放，按 `emotion` 查本地映射表展示 gif。
+- [x] 复用阶段 1 协议与同一个插件实例，验证「换 client 不改插件」（WS 一套协议同时喂手机与 ESP32）。
+- [ ] 效果实测：首字延迟、音频连续性、形象帧率、后台/锁屏保活、功耗。（0.11.0 真机闭环待测）
+- [x] 抽出可移植 client 层：`net/WsSession.kt`（协议编解码 + 重连）、`voice/StreamingPlayer.kt`（音频输出 + 字幕时序），阶段 3 可直接照着写 C++。
 - [ ] 验收：与阶段 1 两端表现一致；替换资源包与映射表即可换形象，**server 零改动**；记录实测数据。
 
 ## 3. ESP32（从零实现固件，Waveshare ESP32-S3-Touch-AMOLED-1.75C）

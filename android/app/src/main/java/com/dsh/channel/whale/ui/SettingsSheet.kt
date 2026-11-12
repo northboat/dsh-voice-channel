@@ -144,29 +144,23 @@ fun SettingsSheet(
                 }
             }
             Text(
-                text = "Eva 是内置形象，不占素材；导入 zip 后可以改名、覆盖导入或删除。",
+                text = "Deepy 是内置形象，不能删除；导入 zip 后可以改名、覆盖导入或删除。",
                 fontSize = 11.sp,
                 lineHeight = 16.sp,
                 color = Color(0xFF6F7FA3),
             )
             Spacer(Modifier.height(10.dp))
 
-            AvatarRow(
-                name = "Eva",
-                detail = "内置线条表情",
-                selected = state.packId.isEmpty(),
-                onSelect = { onPack("") },
-            )
             state.packs.forEach { pack ->
-                Spacer(Modifier.height(8.dp))
                 AvatarRow(
                     name = pack.name,
-                    detail = pack.detail(),
+                    detail = if (pack.id == AvatarPacks.BUILT_IN) "内置形象" else pack.detail(),
                     selected = state.packId == pack.id,
                     onSelect = { onPack(pack.id) },
-                    onRename = { renameTarget = pack },
-                    onDelete = { deleteTarget = pack },
+                    onRename = if (pack.id == AvatarPacks.BUILT_IN) null else ({ renameTarget = pack }),
+                    onDelete = if (pack.id == AvatarPacks.BUILT_IN) null else ({ deleteTarget = pack }),
                 )
+                Spacer(Modifier.height(8.dp))
             }
         }
     }

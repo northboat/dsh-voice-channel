@@ -1,24 +1,18 @@
 package com.dsh.channel.whale.voice
 
 /**
- * 语音输入契约：麦克风常驻打开，按句切分后交给 PC 侧识别（[CallSpeechInput]）。
- * 所有事件统一投递到主线程。
+ * 语音输入契约：麦克风常驻打开，按句切分后交给 WS 上行（[CallSpeechInput]）。
+ * 识别结果从连接上以 `stt` 回来，不走这里。所有事件统一投递到主线程。
  */
 interface SpeechInput {
     sealed interface Event {
         /** 麦克风已打开，进入常驻监听。 */
         data object Ready : Event
 
-        /**
-         * 检测到用户开口（已过防误触窗口）。
-         * 上层据此打断朗读 / 取消进行中的请求——说话即打断，不需要任何按钮。
-         */
+        /** 检测到用户开口（已过防误触窗口）；用于 UI/日志，不打断朗读。 */
         data object SpeechStarted : Event
 
-        /** 一句话的最终文本（PC 侧识别返回，空文本不上抛）。 */
-        data class Result(val text: String) : Event
-
-        /** 一段录音已结束，正在等 PC 侧返回文本。 */
+        /** 一段录音已结束，已交给 WS 上行。 */
         data object Recognizing : Event
 
         /** 当前帧音量（dBFS，每 200 ms 一次；UI 暂未消费）。 */

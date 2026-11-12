@@ -7,6 +7,11 @@ import { asr } from './asr.js'
 import { handleAsr } from './asr_http.js'
 import { tts } from './tts.js'
 import { handleTts, handleTtsVoices } from './tts_http.js'
+import { detectEmotion } from './text.js'
+import { attachWebSocket } from './ws.js'
+import { XiaozhiSession } from './xiaozhi.js'
+import { opusAvailable } from './opus.js'
+import { mp3Available } from './mp3.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const PAGE_PATH = path.join(HERE, '..', 'public', 'index.html')
@@ -20,6 +25,18 @@ let lastBackend = 'demo'
 let lastError = ''
 const eventListeners = new Set()
 const clients = new Map()
+/** WS 长连接的会话表（管理页「在线设备」用；连接关掉就删）。 */
+const wsSessions = new Map()
+const codecs = { opus: false, mp3: false }
+let wsHub = null
+let wsTotal = 0
+
+// 懒探测一次：缺依赖时 HTTP 路由照常可用，只有 xiaozhi 设备的 Opus 链路会不可用。
+Promise.all([opusAvailable(), mp3Available()]).then(([opus, mp3]) => {
+  codecs.opus = opus
+  codecs.mp3 = mp3
+  if (!opus && !mp3) console.warn('[dsh-voice-channel] opusscript / mpg123-decoder 不可用，仅 pcm16 client 能出声')
+}).catch(() => {})
 
 function isLoopback(req) {
   const ip = String(req.socket?.remoteAddress ?? '')
@@ -53,7 +70,25 @@ function clientList() {
   const now = Date.now()
   return [...clients.values()]
     .sort((a, b) => b.lastSeen - a.lastSeen)
-    .map((row) => ({ ...row, online: now - row.lastSeen < 5 * 60 * 1000 }))
+    .map((row) => ({
+      ...row,
+      online: now - row.lastSeen < 5 * 60 * 1000,
+      ws: wsSessions.get(row.id)?.stats() ?? null,
+    }))
+}
+
+/** WS 连接也算一次「设备上线」：长连接没有请求头，握手信息里取 device-id。 */
+function noteWsClient(conn, deviceId) {
+  const id = String(deviceId || conn.remote || 'unknown').slice(0, 64)
+  const now = Date.now()
+  const row = clients.get(id) ?? { id, firstSeen: now, requests: 0 }
+  row.ip = conn.remote || row.ip || ''
+  row.lastSeen = now
+  row.requests += 1
+  row.auth = 'ws'
+  row.transport = 'ws'
+  clients.set(id, row)
+  return id
 }
 
 function ownNames(value) {
@@ -78,18 +113,6 @@ function send(res, code, body, type = 'application/json; charset=utf-8') {
   res.end(typeof body === 'string' ? body : JSON.stringify(body))
 }
 
-function detectEmotion(text) {
-  const t = String(text || '')
-  if (/失败|异常|错误|无法|error/i.test(t)) return 'error'
-  if (/开心|高兴|太棒|成功|完成|哈哈|恭喜/.test(t)) return 'happy'
-  if (/难过|遗憾|可惜|伤心|抱歉/.test(t)) return 'sad'
-  if (/生气|愤怒|烦|讨厌/.test(t)) return 'angry'
-  if (/居然|竟然|惊讶|没想到|不会吧/.test(t)) return 'surprised'
-  if (/思考|分析|计算|首先|让我想|步骤/.test(t)) return 'thinking'
-  if (/困|睡|晚安|休息/.test(t)) return 'sleepy'
-  return 'neutral'
-}
-
 async function* demoChat(text) {
   const reply = text
     ? `收到：「${text}」。\n\n演示后端：DSH 会话未就绪。请重新加载插件后查看 /api/health。`
@@ -100,7 +123,9 @@ async function* demoChat(text) {
   }
 }
 
-async function* endpointChat(endpoint, text, sessionId) {
+async function* endpointChat(endpoint, text, context) {
+  // 调用方统一传 `{ sessionId, clientId }`（与 chat.js 的 createChat 一致），这里兼容旧的字符串写法。
+  const sessionId = typeof context === 'string' ? context : context?.sessionId
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -111,18 +136,33 @@ async function* endpointChat(endpoint, text, sessionId) {
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let sawDelta = false
+  // NDJSON：`delta` 是增量，`done` 又带一遍完整文本。两个都吐会把整段回复说两遍，
+  // 所以只在「一条 delta 都没见过」时才拿 done 兜底。
+  const emit = function* (line) {
+    if (!line.trim()) return
+    let message
+    try { message = JSON.parse(line) } catch { yield line; return }
+    const type = String(message?.type ?? '')
+    if (type === 'delta') {
+      if (message.text) { sawDelta = true; yield String(message.text) }
+      return
+    }
+    if (type === 'done' || type === '') {
+      if (!sawDelta && message.text) { sawDelta = true; yield String(message.text) }
+      return
+    }
+    if (type === 'error' && message.error) throw new Error(String(message.error))
+  }
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
     buffer += decoder.decode(value, { stream: true })
     const lines = buffer.split('\n')
     buffer = lines.pop() || ''
-    for (const line of lines) {
-      if (!line.trim()) continue
-      try { yield String(JSON.parse(line).text ?? JSON.parse(line).delta ?? '') } catch { yield line }
-    }
+    for (const line of lines) yield* emit(line)
   }
-  if (buffer.trim()) { try { yield String(JSON.parse(buffer).text ?? '') } catch { yield buffer } }
+  yield* emit(buffer)
 }
 
 async function loadChat() {
@@ -223,7 +263,63 @@ function bridgeState(res, req) {
   })
 }
 
-async function handleBridge(req, res, pathname) {
+function wsStats() {
+  return {
+    live: wsSessions.size,
+    total: wsTotal,
+    sessions: [...wsSessions.values()].map((session) => session.stats()),
+  }
+}
+
+/** 运行状态：管理页「检查运行状态」用同一份，不再单开模块/接口。 */
+function healthPayload() {
+  return {
+    ok: true,
+    lastError: lastError ?? null,
+    backend: lastBackend,
+    sessionId: runtimeInfo.__sessionId ?? null,
+    modelSelected: runtimeInfo.modelSelected ?? null,
+    workspaceTitle: runtimeInfo.workspaceTitle ?? null,
+    asr: asr.status(),
+    tts: tts.status(),
+    ws: wsStats(),
+    codecs,
+  }
+}
+
+/**
+ * OTA（设备开机第一步）：xiaozhi 设备靠这里的响应把 WS 地址与 token 写进 NVS，
+ * 不改固件就能指向本插件。字段见 `xiaozhi-esp32/main/ota.cc:180-199`。
+ */
+function handleOta(req, res) {
+  const host = String(req.headers.host ?? '').trim() || `127.0.0.1:${PORT}`
+  send(res, 200, {
+    server_time: { timestamp: Date.now(), timezone_offset: 480 },
+    websocket: { url: `ws://${host}/xiaozhi/v1/`, token: readState().pin ?? '', version: 1 },
+  })
+}
+
+async function handleBridge(req, res, url) {
+  const pathname = url.pathname
+  // 管理页是嵌在 DSH 里的同源 iframe，/api/* 会打到引擎自己身上（回 "not found"）。
+  // 所以管理页需要的东西全部挂在插件自己的前缀下。
+  // 纯 ping：不读引擎、不建会话，能回包就说明这条通道是通的。
+  if (pathname === '/dsh-voice-channel/ping' && req.method === 'GET') {
+    send(res, 200, { ok: true, at: Date.now() })
+    return true
+  }
+  if (pathname === '/dsh-voice-channel/health' && req.method === 'GET') {
+    send(res, 200, healthPayload())
+    return true
+  }
+  if (pathname === '/dsh-voice-channel/voices' && req.method === 'GET') {
+    await handleTtsVoices(req, res, url)
+    return true
+  }
+  if (pathname === '/dsh-voice-channel/tts' && (req.method === 'GET' || req.method === 'POST')) {
+    await handleTts(req, res, url)
+    return true
+  }
   if (pathname === '/dsh-voice-channel/memory.log' && req.method === 'GET') {
     if (!isLoopback(req)) { send(res, 401, { error: 'local only' }); return true }
     let text = ''
@@ -265,7 +361,7 @@ export function createServer() {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`)
     if (req.method === 'OPTIONS') { cors(res); res.writeHead(204); res.end(); return }
     try {
-      if (await handleBridge(req, res, url.pathname)) return
+      if (await handleBridge(req, res, url)) return
     } catch (error) {
       send(res, 500, { error: String(error?.message ?? error) })
       return
@@ -276,7 +372,11 @@ export function createServer() {
       for (const [key, value] of Object.entries(runtimeInfo)) {
         if (!key.startsWith('__')) probe[key] = value
       }
-      send(res, 200, { ok: true, pluginLoaded: Boolean(runtimeCtx), backend: lastBackend, lastError, sessionId: runtimeInfo.__sessionId ?? null, lastVia: runtimeInfo.__lastVia ?? null, asr: asr.status(), tts: tts.status(), probe, port: PORT })
+      send(res, 200, { ok: true, pluginLoaded: Boolean(runtimeCtx), backend: lastBackend, lastError, sessionId: runtimeInfo.__sessionId ?? null, lastVia: runtimeInfo.__lastVia ?? null, asr: asr.status(), tts: tts.status(), ws: wsStats(), codecs, probe, port: PORT })
+      return
+    }
+    if ((req.method === 'POST' || req.method === 'GET') && url.pathname.startsWith('/xiaozhi/ota')) {
+      handleOta(req, res)
       return
     }
     if (req.method === 'POST' && url.pathname === '/api/chat') {
@@ -309,7 +409,36 @@ export function createServer() {
     }
     send(res, 404, { error: 'not found' })
   })
+  server.hub = attachWebSocket(server, {
+    paths: ['/ws', '/xiaozhi/v1'],
+    authorize: (req, url) => authorizeUpgrade(req, url),
+    onConnection: (conn, req) => {
+      const ref = { id: '' }
+      const session = new XiaozhiSession(conn, req, {
+        loadChat,
+        asr,
+        tts,
+        noteClient: (c, deviceId) => { ref.id = noteWsClient(c, deviceId) },
+      }, (closed) => {
+        for (const [key, value] of wsSessions) if (value === closed) wsSessions.delete(key)
+      })
+      wsSessions.set(ref.id || session.deviceId, session)
+      wsTotal += 1
+    },
+  })
   return server
+}
+
+/** 握手鉴权：本机免 PIN；LAN 用 Authorization: Bearer <PIN> / X-PIN / ?pin=。 */
+function authorizeUpgrade(req, url) {
+  if (isLoopback(req)) return true
+  const pin = String(readState().pin ?? '')
+  if (!pin) return false
+  const auth = String(req.headers.authorization ?? '')
+  const token = (auth.startsWith('Bearer ') ? auth.slice(7).trim() : '')
+    || String(req.headers['x-pin'] ?? '').trim()
+    || String(url.searchParams.get('pin') ?? '').trim()
+  return token === pin
 }
 
 export const name = 'dsh-voice-channel'
@@ -355,8 +484,8 @@ export function apply(ctx) {
     // 同源路由：左侧边栏主面板用 iframe 打开 /dsh-voice-channel/admin，管理 API 走同源。
     // prefix 不能带尾斜杠：WebServer.match() 用 startsWith(prefix + '/') 判定。
     const bridgeHandler = async (req, res) => {
-      const pathname = new URL(req.url || '/', 'http://localhost').pathname
-      const handled = await handleBridge(req, res, pathname)
+      const url = new URL(req.url || '/', 'http://localhost')
+      const handled = await handleBridge(req, res, url)
       if (!handled) send(res, 404, { error: 'not found' })
     }
     try {
@@ -386,9 +515,12 @@ export function apply(ctx) {
   }
 
   const server = createServer()
-  server.listen(PORT, HOST, () => console.log(`[dsh-voice-channel] client endpoint http://localhost:${PORT}`))
+  wsHub = server.hub ?? null
+  server.listen(PORT, HOST, () => console.log(`[dsh-voice-channel] client endpoint http://localhost:${PORT} ws://localhost:${PORT}/xiaozhi/v1/`))
   server.on('error', (error) => console.error('[dsh-voice-channel] server error:', error.message))
   return () => {
+    wsHub?.close()
+    wsHub = null
     server.close()
     asr.dispose()
     tts.dispose()

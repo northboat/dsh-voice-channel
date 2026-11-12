@@ -18,9 +18,12 @@
   textarea:focus, input:focus, select:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
   textarea { width:100%; min-height:110px; resize:vertical; }
   input { width:150px; letter-spacing:2px; }
-  input[type=number] { width:88px; letter-spacing:normal; }
+  input[type=number] { width:82px; letter-spacing:normal; text-align:center; }
   select { max-width:320px; }
-  label.field { color:var(--muted); font-size:12px; display:flex; gap:7px; align-items:center; }
+  /* 原生下拉的箭头贴边太丑：去掉原生箭头，自己画一个并留 12px 右边距。 */
+  select { appearance:none; -webkit-appearance:none; padding-right:36px; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2393a1c0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center; background-size:14px; }
+  dialog select.wide { width:100%; }
+  label.field { color:var(--muted); font-size:12px; display:flex; gap:12px; align-items:center; }
   .row { display:flex; gap:10px; margin-top:12px; align-items:center; flex-wrap:wrap; }
   button { background:var(--accent); border:0; color:#fff; border-radius:10px; padding:9px 16px; font:inherit; font-size:13px; cursor:pointer; transition:filter .15s, border-color .15s, color .15s; }
   button:hover { filter:brightness(1.12); }
@@ -34,19 +37,25 @@
   @keyframes spin { to { transform:rotate(360deg); } }
   button.danger { background:transparent; border:1px solid #7c2f3a; color:#ff9aa8; }
   .status { font-size:12px; color:var(--muted); }
+  .toast { position:fixed; left:50%; top:24px; transform:translateX(-50%); background:#182342; border:1px solid #3a4c78; color:var(--fg); padding:11px 20px; border-radius:12px; font-size:13px; box-shadow:0 10px 30px rgba(0,0,0,.5); z-index:60; animation:toast-in .16s ease-out; }
+  .toast.error { border-color:#7c2f3a; color:#ff9aa8; }
+  @keyframes toast-in { from { opacity:0; transform:translate(-50%, -8px); } to { opacity:1; transform:translate(-50%, 0); } }
+  .row.tune { gap:30px; }
   .row .status { margin-left:auto; }
+  /* 路径这种长文本要能被按钮挤窄，否则会钻到按钮底下。 */
+  .row code { min-width:0; flex:1 1 220px; }
   code { background:#0e1528; border:1px solid var(--line); border-radius:8px; padding:4px 8px; font-size:12px; word-break:break-all; }
   pre { margin:14px 0 0; padding:14px; background:#0e1528; border:1px solid var(--line); border-radius:10px; color:var(--fg); font-size:12px; line-height:1.6; max-height:320px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
   .client { display:flex; gap:10px; align-items:center; padding:9px 0; border-bottom:1px solid var(--line); font-size:12px; }
   .client:last-child { border-bottom:0; }
   .client .id { flex:1; min-width:0; word-break:break-all; }
   .client .meta { color:var(--muted); }
-  .client select { max-width:150px; padding:4px 8px; font-size:12px; }
+  .client select { max-width:150px; padding:4px 30px 4px 8px; font-size:12px; background-position:right 9px center; background-size:12px; }
   .dot { width:8px; height:8px; border-radius:50%; background:#4ade80; flex:0 0 8px; }
   .dot.off { background:var(--muted); }
   .dot.denied { background:#f87171; }
   .roles { display:flex; flex-direction:column; gap:12px; }
-  .role { display:flex; gap:14px; align-items:flex-start; padding:14px 16px; border:1px solid var(--line); border-radius:12px; background:var(--panel); transition:border-color .15s, background .15s; }
+  .role { display:flex; gap:12px; align-items:flex-start; padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:var(--panel); transition:border-color .15s, background .15s; }
   .role:hover { border-color:#3a4c78; }
   .role.active { border-color:var(--accent); background:#182342; box-shadow:inset 0 0 0 1px var(--accent-soft); }
   .role .body { flex:1; min-width:0; }
@@ -54,13 +63,14 @@
   .role .badge { flex:0 0 auto; font-size:11px; font-weight:400; color:var(--accent); border:1px solid rgba(108,140,255,.55); background:var(--accent-soft); border-radius:999px; padding:1px 8px; }
   .role .preview { color:var(--muted); font-size:12.5px; line-height:1.65; margin-top:6px; word-break:break-all; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
   .role .ops { flex:0 0 auto; display:flex; gap:8px; align-items:center; padding-top:2px; }
-  .role .ops button { padding:6px 12px; font-size:12px; }
+  .role .ops button { padding:9px 18px; font-size:13.5px; border-radius:11px; }
   dialog { width:min(580px, calc(100vw - 32px)); padding:22px 24px; border:1px solid var(--line); border-radius:16px; background:var(--card); color:var(--fg); }
   dialog::backdrop { background:rgba(4,8,18,.74); }
   dialog h2 { font-size:16px; margin:0 0 6px; }
   dialog .hint { margin-bottom:16px; }
-  dialog label.field { margin-top:14px; display:block; }
-  dialog label.field + input, dialog label.field + textarea { margin-top:6px; }
+  /* 只针对弹窗里「标签在上、控件在下」的竖排字段；行内 label 仍保持 flex，否则 gap 失效会贴在一起。 */
+  dialog > label.field { margin-top:14px; display:block; }
+  dialog > label.field + input, dialog > label.field + textarea { margin-top:6px; }
   dialog input.wide { width:100%; letter-spacing:normal; padding:10px 12px; }
   dialog textarea { min-height:190px; }
   dialog .row { margin-top:20px; }
@@ -69,32 +79,15 @@
 <body>
 <main>
   <h1>小鲸鱼</h1>
-  <div class="tag">角色、记忆和声音都在这里调。</div>
+  <div class="tag">角色、记忆和手机连接都在这里调。</div>
 
   <section class="card">
     <h2>角色</h2>
-    <p class="hint">可以存多个角色，对话默认用标着「默认角色」的那一个；点「编辑」在弹窗里改详情。</p>
+    <p class="hint">可以存多个角色，对话默认用带「默认角色」角标的那个。每个角色有自己的提示词、音色、语速和音调，点「编辑」修改。</p>
     <div class="roles" id="roles"><div class="hint">读取中…</div></div>
     <div class="row">
       <button id="newRole">新增角色</button>
       <span class="status" id="status"></span>
-    </div>
-  </section>
-
-  <section class="card">
-    <h2>声音</h2>
-    <p class="hint">所有设备共用这把声音，改完自动保存，下一句生效（电脑需要联网）。</p>
-    <div class="row">
-      <select id="ttsVoice" title="Edge 音色"></select>
-      <button class="icon" id="ttsLive" title="刷新在线音色" aria-label="刷新在线音色">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1" /><path d="M20.5 3.5v5h-5" /></svg>
-      </button>
-    </div>
-    <div class="row">
-      <label class="field">语速 %<input id="ttsRate" type="number" min="-50" max="100" step="1" /></label>
-      <label class="field">音调 Hz<input id="ttsPitch" type="number" min="-50" max="50" step="1" /></label>
-      <button id="ttsPreview">试听</button>
-      <span class="status" id="ttsStatus"></span>
     </div>
   </section>
 
@@ -105,7 +98,6 @@
       <code id="memoryPath">读取中…</code>
       <button id="openLog">打开日志</button>
       <button class="ghost" id="copyPath">复制路径</button>
-      <span class="status" id="logStatus"></span>
     </div>
     <pre id="logView" hidden></pre>
   </section>
@@ -122,31 +114,37 @@
 
   <section class="card">
     <h2>在线设备</h2>
-    <p class="hint">最近 5 分钟内连过的设备。每台设备一个角色，没选过的就是默认角色，选过就固定下来。</p>
+    <p class="hint">最近 5 分钟连过的手机。下拉框里选它用哪个角色。</p>
     <div id="clients"><div class="hint">读取中…</div></div>
     <div class="row">
       <button id="refreshClients">刷新</button>
+      <button class="ghost" id="diagCheck">检查运行状态</button>
       <span class="status" id="clientStatus"></span>
     </div>
   </section>
-
-  <section class="card">
-    <h2>运行状态</h2>
-    <div class="hint" id="runtime"></div>
-    <div class="row">
-      <button id="diagCheck">检查</button>
-      <span class="status" id="diagStatus"></span>
-    </div>
-  </section>
 </main>
+
+<div id="toast" class="toast" hidden></div>
 
 <dialog id="roleDialog">
   <h2 id="roleTitle">角色详情</h2>
   <p class="hint">名字只影响这一页，角色定义才会进对话。</p>
   <label class="field" for="roleName">名称</label>
   <input id="roleName" class="wide" maxlength="40" autocomplete="off" />
-  <label class="field" for="rolePersona">角色定义</label>
+  <label class="field" for="rolePersona">系统提示词／角色定义</label>
   <textarea id="rolePersona" spellcheck="false" placeholder="例如：你叫马飞飞，是一只可爱的肥鲸鱼……"></textarea>
+  <label class="field" for="roleVoice">音色</label>
+  <div class="row" style="margin-top:6px">
+    <select id="roleVoice" class="wide" title="这个角色用什么声音"></select>
+    <button class="icon" id="voiceReload" title="刷新在线音色" aria-label="刷新在线音色">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1" /><path d="M20.5 3.5v5h-5" /></svg>
+    </button>
+  </div>
+  <div class="row tune">
+    <label class="field">语速 %<input id="roleRate" type="number" min="-50" max="100" step="1" /></label>
+    <label class="field">音调 Hz<input id="rolePitch" type="number" min="-50" max="50" step="1" /></label>
+    <button class="ghost" id="rolePreview">试听</button>
+  </div>
   <div class="row">
     <button id="roleSave">保存</button>
     <button class="ghost" id="roleUse">设为默认角色</button>
@@ -162,6 +160,17 @@ function setStatus(text, id = 'status') {
   const el = $(id)
   el.textContent = text
   setTimeout(() => { if (el.textContent === text) el.textContent = '' }, 2500)
+}
+
+// 短提示：3 秒后自己消失，再点一次重新计时。
+let toastTimer = null
+function toast(text, isError) {
+  const el = $('toast')
+  el.textContent = text
+  el.classList.toggle('error', Boolean(isError))
+  el.hidden = false
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { el.hidden = true }, 3000)
 }
 
 let roleBook = { roles: [], activeRoleId: null }
@@ -186,28 +195,22 @@ async function load() {
   $('pin').value = pinSaved
   $('pin').placeholder = pinSaved ? '' : '重载 Desktop 后可见'
   $('memoryPath').textContent = data.memoryLogPath ?? '重载 Desktop 后可用'
-  applyTts(data.tts ?? {})
-  const r = data.runtime ?? {}
-  const backend = r.backend === 'dsh' ? '本机引擎' : r.backend === 'demo' ? '演示模式' : '未知'
-  const line = `对话：${backend} · 会话：${r.sessionId ?? '无'} · 模型：${r.modelSelected ?? '未选择'} · 工作区：${r.workspaceTitle ?? '未就绪'}`
-  $('runtime').dataset.base = line
-  $('runtime').textContent = line
 }
 
-// 运行状态：点「检查」才查一次健康检查，避免首页多打请求。
+// 运行状态：就是 ping 一下插件接口，能通就「已就绪」，通不了就把错误弹出来。
+// 注意走插件的同源前缀，不能用 /api/health（那是引擎自己的路由，会回纯文本 not found）。
 $('diagCheck').onclick = async () => {
-  const box = $('runtime')
-  const base = box.dataset.base ?? ''
-  setStatus('检查中…', 'diagStatus')
+  setStatus('检查中…', 'clientStatus')
   try {
-    const h = await (await fetch('/api/health')).json()
-    const asr = h.asr?.ready ? '就绪' : '待命'
-    const tts = h.tts?.ready ? '就绪' : '待命'
-    box.textContent = `${base} · 识别：${asr} · 合成：${tts}`
-    setStatus('已更新', 'diagStatus')
+    const res = await fetch('/dsh-voice-channel/ping', { signal: AbortSignal.timeout(4000) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const p = await res.json()
+    if (p.ok === false) throw new Error(String(p.error ?? '接口未响应'))
+    setStatus('', 'clientStatus')
+    toast('已就绪')
   } catch (error) {
-    box.textContent = base
-    setStatus(`失败：${error.message}`, 'diagStatus')
+    setStatus('', 'clientStatus')
+    toast(`检查失败：${error.message}`, true)
   }
 }
 
@@ -220,7 +223,6 @@ async function save(statusId, payload) {
   if (!res.ok) throw new Error(await res.text())
   const data = await res.json()
   if (data.pin) { pinSaved = data.pin; $('pin').value = pinSaved }
-  if (data.tts) applyTts(data.tts)
   if (data.roles) applyRoles(data)
   if (data.bindings) bindings = data.bindings
   setStatus('已保存', statusId)
@@ -240,9 +242,10 @@ const VOICE_ROWS = [
 let audio = null
 
 function renderVoices(rows, current) {
-  const select = $('ttsVoice')
-  const keep = current || select.value
+  const select = $('roleVoice')
+  const keep = current ?? select.value
   select.textContent = ''
+  select.append(new Option('跟随默认音色', ''))
   for (const row of rows) {
     const name = typeof row === 'string' ? row : row.name
     if (!name) continue
@@ -255,76 +258,35 @@ function renderVoices(rows, current) {
   if (keep && [...select.options].some((o) => o.value === keep)) select.value = keep
 }
 
-function applyTts(tts) {
-  if (tts.voice) {
-    if (![...$('ttsVoice').options].some((o) => o.value === tts.voice)) {
-      renderVoices(VOICE_ROWS.map(([name, tag]) => ({ name, gender: tag.startsWith('男') ? 'Male' : 'Female' })), tts.voice)
-    }
-    $('ttsVoice').value = tts.voice
-  }
-  $('ttsRate').value = tts.rate ?? 0
-  $('ttsPitch').value = tts.pitch ?? 0
-}
-
-async function loadVoices(live) {
+async function loadVoices(live, statusId = 'roleStatus') {
   try {
-    const res = await fetch(`/api/tts/voices?locale=zh${live ? '&live=1' : ''}`)
+    const res = await fetch(`/dsh-voice-channel/voices?locale=zh${live ? '&live=1' : ''}`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
-    renderVoices(data.voices ?? [], data.current?.voice ?? $('ttsVoice').value)
-    if (data.current) {
-      $('ttsRate').value = data.current.rate
-      $('ttsPitch').value = data.current.pitch
-    }
-    setStatus(live ? `已刷新 ${data.count} 个音色` : '', 'ttsStatus')
+    renderVoices(data.voices ?? [], $('roleVoice').value)
+    if (live) setStatus(`已刷新 ${data.count} 个音色`, statusId)
   } catch (error) {
-    setStatus(`音色清单失败：${error.message}`, 'ttsStatus')
+    setStatus(`音色清单失败：${error.message}`, statusId)
   }
 }
 
-$('ttsLive').onclick = async () => {
-  const btn = $('ttsLive')
+$('voiceReload').onclick = async () => {
+  const btn = $('voiceReload')
   btn.classList.add('busy')
   try { await loadVoices(true) } finally { btn.classList.remove('busy') }
 }
 
-// 没有保存按钮：换音色 / 改语速音调都直接落盘（输入停 600ms 再提交）。
-let ttsTimer = null
-
-function pushTts() {
-  return save('ttsStatus', {
-    tts: {
-      voice: $('ttsVoice').value,
-      rate: Number($('ttsRate').value) || 0,
-      pitch: Number($('ttsPitch').value) || 0,
-    },
-  }).catch((error) => setStatus(`失败：${error.message}`, 'ttsStatus'))
-}
-
-function queueTtsSave() {
-  clearTimeout(ttsTimer)
-  ttsTimer = setTimeout(() => {
-    // 输入框停在半截数字（空 / 只有负号）时先不提交，免得被服务端回写打断输入。
-    if (!/^-?\d+$/.test($('ttsRate').value.trim())) return
-    if (!/^-?\d+$/.test($('ttsPitch').value.trim())) return
-    pushTts()
-  }, 600)
-}
-
-$('ttsVoice').onchange = () => pushTts()
-$('ttsRate').oninput = queueTtsSave
-$('ttsPitch').oninput = queueTtsSave
-
-$('ttsPreview').onclick = async () => {
+// 试听：和手机上走同一条路径（/dsh-voice-channel/tts），用的是弹窗里当前这套参数。
+$('rolePreview').onclick = async () => {
   const payload = {
     text: '你好，我是小鲸鱼。这是当前音色的试听。',
-    voice: $('ttsVoice').value,
-    rate: Number($('ttsRate').value) || 0,
-    pitch: Number($('ttsPitch').value) || 0,
+    voice: $('roleVoice').value,
+    rate: Number($('roleRate').value) || 0,
+    pitch: Number($('rolePitch').value) || 0,
   }
-  setStatus('合成中…', 'ttsStatus')
+  setStatus('合成中…', 'roleStatus')
   try {
-    const res = await fetch('/api/tts', {
+    const res = await fetch('/dsh-voice-channel/tts', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
@@ -335,9 +297,9 @@ $('ttsPreview').onclick = async () => {
     audio = new Audio(url)
     audio.onended = audio.onerror = () => URL.revokeObjectURL(url)
     await audio.play()
-    setStatus(`试听 ${res.headers.get('x-tts-voice') ?? ''}`, 'ttsStatus')
+    setStatus(`试听 ${res.headers.get('x-tts-voice') ?? ''}`, 'roleStatus')
   } catch (error) {
-    setStatus(`试听失败：${error.message}`, 'ttsStatus')
+    setStatus(`试听失败：${error.message}`, 'roleStatus')
   }
 }
 
@@ -357,7 +319,7 @@ async function loadClients(announce) {
     if (!rows.length) {
       const empty = document.createElement('div')
       empty.className = 'hint'
-      empty.textContent = '暂无设备接入。'
+      empty.textContent = '还没有手机连过。手机装好 App、在设置里填上这台电脑的地址连一次，就会出现在这里。'
       box.append(empty)
       return
     }
@@ -406,7 +368,14 @@ $('refreshClients').onclick = () => loadClients(true)
 let editingRole = null
 
 function blankRole() {
-  return { id: `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, name: '', persona: '' }
+  return {
+    id: `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    name: '',
+    persona: '',
+    voice: '',
+    rate: 0,
+    pitch: 0,
+  }
 }
 
 function renderRoles() {
@@ -436,7 +405,9 @@ function renderRoles() {
     }
     const preview = document.createElement('div')
     preview.className = 'preview'
-    preview.textContent = String(role.persona ?? '').trim() || '（角色定义为空）'
+    const voiceLabel = role.voice ? `声音：${role.voice}` : '声音：跟随默认'
+    const tune = `语速 ${role.rate ?? 0}% · 音调 ${role.pitch ?? 0}Hz`
+    preview.textContent = `${voiceLabel} · ${tune} · ${String(role.persona ?? '').trim() || '（角色定义为空）'}`
     body.append(name, preview)
     const ops = document.createElement('div')
     ops.className = 'ops'
@@ -470,6 +441,14 @@ function openRole(roleId) {
   $('roleTitle').textContent = found ? '编辑角色' : '新增角色'
   $('roleName').value = editingRole.name
   $('rolePersona').value = editingRole.persona
+  $('roleVoice').value = editingRole.voice ?? ''
+  if (!$('roleVoice').value && editingRole.voice) {
+    // 清单里还没有这个音色（离线/自定义）：补一个选项，免得显示成「跟随默认」。
+    $('roleVoice').append(new Option(editingRole.voice, editingRole.voice))
+    $('roleVoice').value = editingRole.voice
+  }
+  $('roleRate').value = editingRole.rate ?? 0
+  $('rolePitch').value = editingRole.pitch ?? 0
   $('roleDelete').hidden = !found
   $('roleUse').hidden = !found || editingRole.id === roleBook.activeRoleId
   $('roleStatus').textContent = ''
@@ -481,6 +460,9 @@ function draftOf() {
   return {
     name: $('roleName').value.trim() || '未命名角色',
     persona: $('rolePersona').value,
+    voice: $('roleVoice').value,
+    rate: Math.max(-50, Math.min(100, Number($('roleRate').value) || 0)),
+    pitch: Math.max(-50, Math.min(50, Number($('rolePitch').value) || 0)),
   }
 }
 
@@ -588,11 +570,17 @@ $('openLog').onclick = async () => {
     box.hidden = false
   }
 }
-$('copyPath').onclick = () => navigator.clipboard?.writeText($('memoryPath').textContent)
-  .then(() => setStatus('路径已复制', 'logStatus'))
-  .catch(() => setStatus('复制失败，请手动选中路径', 'logStatus'))
+$('copyPath').onclick = async () => {
+  try {
+    if (!navigator.clipboard) throw new Error('浏览器不支持剪贴板')
+    await navigator.clipboard.writeText($('memoryPath').textContent)
+    toast('路径已复制')
+  } catch (error) {
+    toast(`复制失败：${error.message}`, true)
+  }
+}
 renderVoices(VOICE_ROWS.map(([name, tag]) => ({ name, gender: tag.startsWith('男') ? 'Male' : 'Female' })))
-load().catch((e) => { $('runtime').textContent = `读取失败：${e.message}` })
+load().catch((e) => toast(`读取失败：${e.message}`, true))
 loadVoices()
 loadClients()
 setInterval(loadClients, 5000)

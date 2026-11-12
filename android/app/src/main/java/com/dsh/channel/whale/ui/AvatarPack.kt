@@ -29,8 +29,9 @@ import java.util.zip.ZipInputStream
  * }
  * ```
  *
- * 内置形象是不依赖素材的 Eva；除此之外所有素材都在 `filesDir/packs/<id>/`，
- * 只能通过导入 zip 添加，之后可重命名、覆盖导入、删除。APK 里不带任何素材文件。
+ * 唯一的内置形象是 Deepy，素材随 APK 放在 `assets/packs/deepy/`，首次启动复制到
+ * `filesDir/packs/deepy/`。其余素材都在 `filesDir/packs/<id>/`，只能通过导入 zip 添加，
+ * 之后可重命名、覆盖导入、删除；内置包删了也会自动补回来。
  */
 data class AvatarPack(
     val id: String,
@@ -41,7 +42,7 @@ data class AvatarPack(
     val files: Set<String>,
     val dir: File,
 ) {
-    /** 情绪 → 素材引用；null 表示这个包没有可用文件，调用方回退内置 Eva。 */
+    /** 情绪 → 素材引用；null 表示这个包没有可用文件（调用方画空白，不换形象兜底）。 */
     fun asset(emotion: Emotion): AvatarRef? {
         val anim = emotions[emotion.key] ?: fallback
         return resolve(anim) ?: resolve(fallback)
@@ -62,10 +63,41 @@ sealed interface AvatarRef {
 object AvatarPacks {
     const val ROOT = "packs"
 
-    /** 空字符串代表内置 Eva（不依赖任何素材文件）。 */
-    const val BUILT_IN = ""
+    /** 唯一的内置形象 id：素材在 `assets/packs/deepy`，首次启动复制到 filesDir。 */
+    const val BUILT_IN = "deepy"
 
     private const val MAX_ENTRIES = 500
+
+    fun isBuiltIn(pack: AvatarPack): Boolean = pack.id == BUILT_IN
+
+    /**
+     * assets 里的内置包没有就从 APK 补一份：用户误删、导入同名包覆盖坏掉，都能自愈。
+     * 正常情况只是一次 `isFile` 判断，不产生额外 IO。
+     */
+    fun ensureBuiltIn(context: Context) {
+        val dir = File(packsDir(context), BUILT_IN)
+        if (File(dir, "pack.json").isFile) return
+        runCatching {
+            dir.deleteRecursively()
+            copyAssetDir(context, "$ROOT/$BUILT_IN", dir)
+        }
+    }
+
+    private fun copyAssetDir(context: Context, assetPath: String, target: File) {
+        val names = context.assets.list(assetPath).orEmpty()
+        if (names.isEmpty()) return
+        target.mkdirs()
+        for (name in names) {
+            val child = "$assetPath/$name"
+            if (context.assets.list(child).orEmpty().isNotEmpty()) {
+                copyAssetDir(context, child, File(target, name))
+            } else {
+                context.assets.open(child).use { input ->
+                    File(target, name).outputStream().use { input.copyTo(it) }
+                }
+            }
+        }
+    }
 
     /**
      * 素材第一帧的边缘平均色：页面背景用它，素材底色就和背景一致，看起来是融进去的。
@@ -102,14 +134,16 @@ object AvatarPacks {
     }.getOrNull()
 
     fun load(context: Context): List<AvatarPack> = runCatching {
+        ensureBuiltIn(context)
         packsDir(context).listFiles().orEmpty()
             .filter { it.isDirectory }
             .mapNotNull { readDir(it) }
-            .sortedBy { it.name.lowercase() }
+            // 内置的排最前，其余按名字。
+            .sortedWith(compareBy({ it.id != BUILT_IN }, { it.name.lowercase() }))
     }.getOrDefault(emptyList())
 
     fun find(packs: List<AvatarPack>, id: String): AvatarPack? =
-        if (id.isEmpty()) null else packs.firstOrNull { it.id == id }
+        packs.firstOrNull { it.id == id }
 
     /**
      * 导入 zip（压缩包根目录或唯一子目录里要有 pack.json）。
@@ -138,8 +172,9 @@ object AvatarPacks {
         }
     }
 
-    /** 改名只动 `pack.json` 的 `name`，目录 id 保持不变（id 是引用键）。 */
+    /** 改名只动 `pack.json` 的 `name`，目录 id 保持不变（id 是引用键）。内置包不许改名。 */
     fun rename(pack: AvatarPack, name: String): AvatarPack? = runCatching {
+        if (isBuiltIn(pack)) return null
         val clean = name.trim().take(24)
         if (clean.isBlank()) return null
         val manifest = File(pack.dir, "pack.json")
@@ -149,7 +184,9 @@ object AvatarPacks {
         readDir(pack.dir)
     }.getOrNull()
 
-    fun delete(pack: AvatarPack): Boolean = pack.dir.deleteRecursively()
+    /** 内置包删不掉（删了也会被 [ensureBuiltIn] 补回来，索性直接拒绝）。 */
+    fun delete(pack: AvatarPack): Boolean =
+        if (isBuiltIn(pack)) false else pack.dir.deleteRecursively()
 
     private fun packsDir(context: Context): File =
         File(context.filesDir, ROOT).apply { mkdirs() }

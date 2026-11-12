@@ -1,8 +1,8 @@
 {
   "name": "dsh-voice-channel",
-  "version": "0.1.0",
+  "version": "0.11.0",
   "private": true,
-  "description": "client-agnostic DSH voice/emotion bridge for PC, Android and ESP32 clients",
+  "description": "client-agnostic DSH voice/emotion bridge (xiaozhi WS protocol) for Android, ESP32 and web clients",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
@@ -11,16 +11,30 @@
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
-  "files": ["lib", "public", "cordis.patch.yml"],
+  "files": [
+    "lib",
+    "public",
+    "cordis.patch.yml"
+  ],
   "engines": {
     "node": ">=22.19",
     "dsh": ">=0.2.0-0 <0.3.0-0"
   },
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
-    "client": { "platform": "web" }
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
   },
   "scripts": {
-    "start": "node lib/index.js"
+    "start": "node lib/index.js",
+    "test": "node test/ws_test.mjs",
+    "test:full": "node test/ws_full.mjs"
+  },
+  "dependencies": {
+    "mpg123-decoder": "^1.0.3",
+    "opusscript": "^0.0.8"
   }
 }

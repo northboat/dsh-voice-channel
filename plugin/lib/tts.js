@@ -148,10 +148,12 @@ class EdgeTts {
         if (this.buffer.length < this.expect.size) return
         const audio = this.buffer.subarray(0, this.expect.size)
         this.buffer = this.buffer.subarray(this.expect.size)
-        const item = this.expect.item
+        const { item, header: expectHeader } = this.expect
         this.expect = null
+        // 超时/取消的请求没有 item：音频字节照样要吃掉，否则会被当成下一行 JSON 解析，帧流从此失步。
+        if (!item) continue
         clearTimeout(item.timer)
-        item.resolve({ ...item.header, audio })
+        item.resolve({ ...expectHeader, audio })
         continue
       }
       const index = this.buffer.indexOf(10)
@@ -168,26 +170,30 @@ class EdgeTts {
         continue
       }
       const item = this.pending.get(header.id)
-      if (!item) continue
-      this.pending.delete(header.id)
       if (header.ok && header.bytes > 0) {
-        this.expect = { size: Number(header.bytes), item, header }
+        // 迟到响应（已超时）也把音频长度记进 expect，保证下面的二进制被整块跳过。
+        if (item) this.pending.delete(header.id)
+        this.expect = { size: Number(header.bytes), item: item ?? null, header }
         continue
       }
+      if (!item) continue
+      this.pending.delete(header.id)
       clearTimeout(item.timer)
       if (header.ok) item.resolve({ ...header, audio: Buffer.alloc(0) })
       else item.reject(new Error(header.error || 'tts failed'))
     }
   }
 
-  call(payload, timeoutMs = 30000) {
+  // edge-tts 实测单次 2~17 s，worker 对网络异常还会重试一次（最坏 ~2×）；
+  // 30 s 会把「慢但成功」误判成失败。放宽到 90 s，超时后由 onData 吃掉迟到音频，不会拖垮后续请求。
+  call(payload, timeoutMs = 90000) {
     return this.start().then(() => {
       if (!this.ready || !this.child) throw new Error(this.error || 'TTS 未就绪')
       const id = ++this.seq
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           this.pending.delete(id)
-          reject(new Error('TTS 超时（30s）'))
+          reject(new Error(`TTS 超时（${Math.max(1, Math.round(timeoutMs / 1000))}s）`))
         }, timeoutMs)
         this.pending.set(id, { resolve, reject, timer })
         const body = Buffer.from(JSON.stringify({ ...payload, id }), 'utf8')

@@ -1,10 +1,10 @@
-# dsh-voice-channel（Android client）开发记录
+# Deepy（Android client）开发记录
 
 阶段 2 的 Android client：点进去只有一只鲸鱼、没有输入框，纯语音与局域网插件对话。
 
 当前版本 **0.10.1**（`versionCode 11`）。架构：**手机只做「常驻录音 + 断句 + 播放」**，ASR 与 TTS 都在插件端；client 只发文本，音色 / 语速由服务端固定，本机既不初始化系统 TTS，也不带任何音色配置。debug APK **25.45 MiB**。
 
-0.6.0 之前是「点一下说一句」的对讲机形态；0.7.0 改为**通话模式**：点一下进入通话后麦克风常驻打开，说完自动回到听，鲸鱼朗读时**直接开口就能打断**，不需要任何按钮。0.8.0 主页形象改成**可换的资源包**；0.9.0 修好「素材只有 1 帧 + `start()` 时机不对」导致形象不动的问题；0.10.0 内置形象换成线条 Eva，素材改成可拆装（导入 / 改名 / 删除 / 恢复内置），deepy 的卡片底板在素材层面抠掉、页面背景跟随素材底色。0.10.1 之后又收敛了一轮：**Eva 不再画头框、脖子、嘴巴和光晕，只留一双发光的眼睛，主页形象铺满整块屏幕**（见 3.10）。界面文案在 0.6.0 收敛过一次（设置页只留「地址 + 配对码 + 连接状态」），技术细节在 [`docs/app-client.md`](../docs/app-client.md)。
+0.6.0 之前是「点一下说一句」的对讲机形态；0.7.0 改为**通话模式**：点一下进入通话后麦克风常驻打开，说完自动回到听，鲸鱼朗读时**直接开口就能打断**，不需要任何按钮。0.8.0 主页形象改成**可换的资源包**；0.9.0 修好「素材只有 1 帧 + `start()` 时机不对」导致形象不动的问题；0.10.0 内置形象换成线条 Eva，素材改成可拆装（导入 / 改名 / 删除 / 恢复内置），deepy 的卡片底板在素材层面抠掉、页面背景跟随素材底色。0.10.1 之后又收敛了一轮：形象改为**唯一内置的 Deepy 素材包**（代码绘制的线条 Eva 已整体删除，见 3.10），主页形象铺满整块屏幕；朗读期间用户开口**不再打断**，识别结果与回复各自排队。界面文案在 0.6.0 收敛过一次（设置页只留「地址 + 配对码 + 连接状态」），技术细节在 [`docs/app-client.md`](../docs/app-client.md)。
 
 本文记录设计取舍、可复现命令和实现细节。整体路线见根目录 `TODO.md` / `HANDOFF.md`，插件侧见 `plugin/`。
 
@@ -45,7 +45,7 @@ adb shell pm query-activities -a android.speech.action.RECOGNIZE_SPEECH → 无�
 | 依赖 | 系统引擎（该机没有） | 无 | PC 在线（本来就必须） |
 | 识别质量 | 不可用 | 中文小模型 CER 23.5~38.3% | 可换 PC 大模型（当前同模型，可升级） |
 | 首启开销 | 无 | 解包 42 MB + 加载约 300 MB 内存 | 无 |
-| 交互 | 点按说话 | 点按说话 | **0.7.0 起常驻监听 + 插话打断** |
+| 交互 | 点按说话 | 点按说话 | **0.7.0 起常驻监听**（0.10.x 起开口不打断，识别与播放各自排队） |
 | 结论 | 否决 | 可用但 APK 118 MB | **采用** |
 
 0.2.0 的端侧方案确实能做到「不依赖系统服务、不联网」，但代价是 116 MiB 的包体、+68 MB 存储、模型常驻约 300 MB 内存、CPU 推理耗电。用户提出体积问题后重新审视，发现一个关键事实：
@@ -98,21 +98,23 @@ and network queues independent from the chip-specific speech pipeline.
 
 如果哪天要给人耳挑音色，服务端 `/api/tts` 的 `voice/rate/pitch` 参数仍在（网页演示页就在用），恢复只需在 client 加一个下拉并把参数带上。
 
-### 1.5.1 通话模式：常驻监听 + 打断（0.7.0）
+### 1.5.1 通话模式：常驻监听（0.7.0 起；0.10.x 改为不打断）
 
-对讲机模型（点一下、说一句、等回复）在真实对话里很割裂：每轮都要摸手机，插话只能等鲸鱼说完。0.7.0 改成**一次进入通话，麦克风常驻打开**，说话即输入，鲸鱼朗读时直接开口就打断。
+对讲机模型（点一下、说一句、等回复）在真实对话里很割裂：每轮都要摸手机，插话只能等鲸鱼说完。0.7.0 改成**一次进入通话，麦克风常驻打开**，说话即输入；当时的策略是「鲸鱼朗读时直接开口就打断」，0.10.x 起改为**不打断**（原因见本节实测结论）。
 
-打断的难点只有一个：**如何分清「用户说话」和「自己的扬声器」**。三层防护：
+无论哪种策略，难点都只有一个：**如何分清「用户说话」和「自己的扬声器」**。三层防护：
 
 | 层 | 做法 | 作用 |
 | --- | --- | --- |
 | 采集 | `VOICE_COMMUNICATION` + `AcousticEchoCanceler` / `NoiseSuppressor` | 平台级回声消除，最理想 |
-| 判定 | 朗读期间阈值抬到 `max(噪声峰值×3.5, 700)`，且要连续 320 ms 才算人声 | 单个噪声帧不会误打断 |
+| 判定 | 朗读期间阈值抬到 `max(噪声峰值×3.5, 700)`，且要连续 320 ms 才算人声 | 单个噪声帧不会被判成一句话 |
 | 兜底 | 朗读期间起步、又始终没被判为人声的片段直接丢弃，不送识别 | 避免把自己的回声当成用户的话再问一遍模型 |
 
-开口前保留 300 ms 预录，所以打断后的头几个字不会丢。
+开口前保留 300 ms 预录，句子开头的几个字不会丢。
 
-**实测结论（重要）**：这台 OPPO PLE110 / Android 16 上 `MediaRecorder.AudioSource.VOICE_COMMUNICATION` **返回全 0 采样**（RMS 恒为 0，等于没数据），`VOICE_RECOGNITION` 正常（静音底噪 RMS ≈ 10、peak ≈ 35，说话 peak 数百到上千）。当前代码因此固定用 `VOICE_RECOGNITION`，**拿不到平台 AEC**——打断只能靠「高阈值 + 持续时长」这条软防线，嘈杂环境或外放音量很大时存在自打断风险，尚未真机验收。
+**实测结论（重要）**：这台 OPPO PLE110 / Android 16 上 `MediaRecorder.AudioSource.VOICE_COMMUNICATION` **返回全 0 采样**（RMS 恒为 0，等于没数据），`VOICE_RECOGNITION` 正常（静音底噪 RMS ≈ 10、peak ≈ 35，说话 peak 数百到上千）。当前代码因此固定用 `VOICE_RECOGNITION`，**拿不到平台 AEC**。
+
+正因如此，**朗读期间不打断**：0.10.x 在客户端用 `pendingSpeaks` / `pendingChats` 两个队列串行（识别结果等上一条回复、回复等当前音频播完）；**0.11.0 起排队移到服务端**——一条 WS 长连接内串行，客户端的这两个队列已删除，开口照常上行、服务端把它排在当前音频之后播。上面「判定 / 兜底」两层保留，作用是避免把自己的回声送进识别，否则会出现自问自答。**代价**：「插话即时静音」这个体验没有了；**尚欠**：无 AEC 条件下自问自答的实测验收。
 
 ### 1.6 体积账
 
@@ -146,7 +148,7 @@ dex 的 30 MiB 降幅来自两点：去掉 `material-icons-extended`（AAR 34.1 
 - **小模型同音字**：`请把空调调到二十六度` → `请把空调条道二十六度`（调→条、到→道）。这是 42 MB 小模型的水平，换 PC 侧大模型可解。
 - **需要重载插件**：`/api/asr` 路由在 `index.js`，而 `index.js` 只在插件加载时执行一次（`chat.js` 才是每次请求动态 import）。所以升级后**要重载一次插件（或重启 Desktop）**，之后一直有效。
 - **VAD 仍是能量法**：判据从帧 RMS 换成**帧内峰值**（100 ms 帧的 RMS 会把音节平均掉，远场说话很容易漏），噪声底用「标定取最小值 + 快降慢升」自适应。强噪声下仍可能把噪声当人声或提前断句。
-- **无平台 AEC（本机）**：`VOICE_COMMUNICATION` 在该 ROM 不可用，朗读期间的自打断只能靠阈值兜底，见 1.5.1。
+- **无平台 AEC（本机）**：`VOICE_COMMUNICATION` 在该 ROM 不可用，因此朗读期间改为不打断；自己的回声仍需阈值 + 丢弃兜底，否则会被识别成一句话，见 1.5.1。
 - **无流式**：要等一句话说完才上传，没有边说边出字。要做流式得改成分片上传 + 服务端增量解码。
 - **通话不跨后台**：没有前台服务 / 唤醒词，切后台或锁屏后系统会掐掉采集；通话只在页面内有效。
 - 只带中文模型；`start(locale)` 的 `locale` 目前只用于 TTS 音色，不影响 ASR。
@@ -305,19 +307,18 @@ Get-FileHash $dst -Algorithm SHA256   # 3AF8B0E7…B14BA
 | 文件 | 职责 |
 | --- | --- |
 | `MainActivity.kt` | 唯一 Activity；Compose 宿主；`RECORD_AUDIO` 运行时权限 |
-| `WhaleViewModel.kt` | 通话状态机 `IDLE / LISTENING / THINKING / SPEAKING` + `callActive`；打断决策 |
+| `WhaleViewModel.kt` | 通话状态机 `IDLE / LISTENING / THINKING / SPEAKING` + `callActive`；WS 事件 → UI 与播放器 |
+| `net/WsSession.kt` | 小智协议长连接：hello / listen / stt / llm / tts + 退避重连 |
 | `voice/SpeechInput.kt` | 语音输入接口 + `Event` 契约（常驻监听） |
-| `voice/CallSpeechInput.kt` | 瘦客户端实现：常驻 `AudioRecord` + 峰值 VAD 切句 + 异步上传 |
-| `net/AsrClient.kt` | `POST /api/asr`，带 PIN 与 `device-id` |
-| `voice/TtsOutput.kt` | 插件端 TTS 播放：`MediaPlayer` + `generation` 打断，无本机合成 |
-| `net/TtsClient.kt` | `POST /api/tts`（只发 `text`），mp3 落 cache 目录 |
-| `net/PluginClient.kt` | `POST /api/chat` NDJSON 流；`GET /api/health` |
+| `voice/CallSpeechInput.kt` | 瘦客户端实现：常驻 `AudioRecord` + 峰值 VAD 切句 + 整段上行（`listen start/write/stop`） |
+| `voice/StreamingPlayer.kt` | `AudioTrack` 边收边播 + 字幕按 `playbackHeadPosition` 推进 |
+| `net/PluginClient.kt` | 只剩 `GET /api/health` 探活（对话与语音都在 WS 上） |
 | `net/LanDiscovery.kt` | 本机 `/24` 扫 8787 + `/api/health` |
 | `net/SettingsStore.kt` | SharedPreferences：endpoint / pin / 稳定 `device-id` |
 | `ui/WhaleScreen.kt` | 主屏；`MicGlyph` 用 Canvas 自绘，避免扩展图标库 |
 | `ui/SettingsSheet.kt` | 设置弹窗：地址 / 配对码 / 搜索 / 连接状态（不写技术说明） |
 | `ui/AvatarPack.kt` | 形象包扫描与解析（`assets/packs/<id>/pack.json`） |
-| `ui/WhaleAvatar.kt` | 按情绪取包内动画；无素材时画内置 Eva（全屏发光眼） |
+| `ui/WhaleAvatar.kt` | 按情绪取包内动画（形象只有内置 Deepy 与导入的包） |
 
 插件侧新增：
 
@@ -334,36 +335,41 @@ Get-FileHash $dst -Algorithm SHA256   # 3AF8B0E7…B14BA
 MainActivity（RECORD_AUDIO 权限）
   └─ WhaleViewModel.onCallToggle()            # 点亮 = 开始通话，再点 = 挂断
        ├─ Phase → LISTENING、callActive = true
+       ├─ WsSession.connect()                 # ws://<host>:8787/xiaozhi/v1/
+       │    └─ server hello（下行 24 kHz）→ player.configure(24000)
        └─ CallSpeechInput.start()             # 麦克风常驻，直到挂断
             ├─ AudioRecord(16 kHz / mono / PCM16, VOICE_RECOGNITION)
             ├─ capture 线程：逐帧 100 ms → 峰值 VAD → 切句
             │    ├─ 连续 200 ms 有声 → CANDIDATE 转 SPEECH、emit SpeechStarted
             │    ├─ 700 ms 静音或 15 s 上限 → 切出一段 PCM
             │    └─ 朗读中起步却没被判定为人声 → 丢弃（自己的回声）
-            └─ asr 线程（单线程池）：AsrClient.transcribe() → POST <endpoint>/api/asr
-                 └─ emit Result → WhaleViewModel.sendToPlugin(text)
-                      └─ PluginClient.chat() NDJSON
-                           ├─ delta   → subtitle = "鲸鱼：…"
-                           ├─ emotion → 换鲸鱼动画
-                           └─ done    → TtsOutput.speak(full)         # 只发文本
-                                          └─ TtsClient.synthesize() → POST <endpoint>/api/tts → mp3
-                                               └─ MediaPlayer 播放 → onCompletion → Phase.LISTENING（通话中）
+            └─ Sink：listen start → 整段 PCM → listen stop（同一线程，FIFO 有序）
 
-打断（SpeechStarted）
-  ├─ 正在 SPEAKING → TtsOutput.stop() + Phase → LISTENING
-  └─ 正在 THINKING → chatJob.cancel() + Phase → LISTENING
-     两者都把这段话当新输入，识别完照常走上面那条链路。
+服务端（一条连接内串行）
+  stt → llm.emotion → tts start → 每句 sentence_start + 音频帧 → tts stop
+
+客户端消费
+  ├─ stt            → subtitle = "你：…"、Phase.THINKING
+  ├─ llm.emotion    → 只进状态（形象按通话阶段播，不按情绪跳帧）
+  ├─ sentence_start → player.mark(text)：记下这句从第几个采样开始
+  ├─ 二进制 PCM     → player.write() → AudioTrack.write（边收边播）
+  └─ tts stop       → player.finishSpeech()；播放头追上写入量 → Phase.LISTENING
+
+开口（SpeechStarted，不打断）
+  ├─ 正在 SPEAKING → 朗读继续；这句照常上行，服务端把它排在当前音频之后
+  └─ 正在 THINKING → 不撤请求；服务端本来就在一个连接内串行
+     两者都不 stop() / abort()，只更新 UI 提示。
 ```
 
-采集与识别在两条线程上，识别耗时（PC 侧 0.3~3 s）不会挡住继续听；`stop()` 递增 `generation`，晚到的结果按代丢弃。
+采集不再等识别：上行只是 `WebSocket.send()` 入队，识别在插件端，PC 侧耗时不会挡住继续听。
 
-事件契约（0.7.0：`Partial` 删除，新增 `SpeechStarted`）：
+事件契约（0.11.0：`Result` 删除，识别结果改从 WS 的 `stt` 回调进来）：
 
 | 事件 | 含义 |
 | --- | --- |
 | `Ready` | 麦克风已打开，进入常驻监听 |
-| `SpeechStarted` | 用户开口（已过防误触窗口），上层据此打断朗读 / 撤请求 |
-| `Result` | 一句的最终文本（空文本不上抛） |
+| `SpeechStarted` | 用户开口（已过防误触窗口）；只用于日志，不打断朗读 |
+| `Recognizing` | 一段已交给 WS 上行 |
 | `Level` | 当前帧 RMS 转 dB（每 200 ms，UI 暂未消费） |
 | `Error` | 失败原因（未连插件、麦克风不可用、插件端识别失败）；通话中只提示不退出 |
 | `Recognizing` | 一段录音已结束，等 PC 返回文本 |
@@ -432,12 +438,12 @@ response = {"id":..,"ok":true,"text":"..","ms":123}\n
 | `CALIBRATION_MS` | 300 | 开头取峰值**最小值**当噪声底（平均值会被麦克风启动瞬态带偏） |
 | 噪声底游走 | 快降慢升 | 安静帧 `noise*0.6+peak*0.4`，变吵只 `*0.98+*0.02`，下限 `NOISE_FLOOR=20` |
 | 静音阈值 | `clamp(噪声底 × 3.5, 120, 2500)` | 实测静音峰值 ~35，远场说话峰值 200~800 |
-| 朗读阈值 | `max(噪声底 × 3.5, 700)` | 播放期间抬高，防自己的回声误打断 |
-| `ONSET_MS` / `ONSET_PLAY_MS` | 200 / 320 | 确认「开口」/「打断」所需的连续有声时长 |
+| 朗读阈值 | `max(噪声底 × 3.5, 700)` | 播放期间抬高，防自己的回声被判成一句话 |
+| `ONSET_MS` / `ONSET_PLAY_MS` | 200 / 320 | 确认「开口」的连续有声时长；朗读期间更严格 |
 | `MIN_SPEECH_MS` | 300 | 短于此的片段直接丢 |
 | `SILENCE_MS` | 700 | 检测到人声后，连续静音这么久就断句 |
 | `MAX_MS` | 15000 | 单句上限 |
-| `PRE_ROLL_FRAMES` | 3 | 开口前保留 300 ms，打断后头几个字不丢 |
+| `PRE_ROLL_FRAMES` | 3 | 开口前保留 300 ms，句子开头不丢 |
 
 切出一段就投给识别线程，麦克风不释放、也不停止采集（这是和 0.6.0 最大的区别）；`stop()` 丢弃缓冲并递增代次。
 
@@ -496,11 +502,14 @@ device-id: <SharedPreferences 里的稳定 UUID>
 
 ### 3.10 情绪资源（合规）
 
-形象分两条路：**内置 Eva**（代码画，零素材）和**素材包**（一个目录一个包，`pack.json` 声明映射，同目录放 gif / webp 动画，用系统 `ImageDecoder` 解码）。
+形象只有一种：**内置的 Deepy 素材包**。素材随 APK 放在 `app/src/main/assets/packs/deepy/`，首次启动由 `AvatarPacks.ensureBuiltIn()` 复制到 `filesDir/packs/deepy/`；包被删掉或覆盖坏掉，下次启动会自动补回来。
 
-- 内置 `BuiltInEva`：**不画边框**——屏幕本身就是她的脸，只有一双 EVE 式的发光眼睛（没有嘴）。眼睛用 `bar()` 四层同形叠加冒充 blur（`EvaEyeHalo` α0.09 → `EvaEyeRim` α0.22 → `EvaEyeMid` → `EvaEyeCore` α0.38），`arcEye()` 画笑眼、`cross()` 画 error；情绪只改眼形（neutral 圆润光斑 / happy 上弯弧 / sad / angry / surprised / thinking / sleepy / error），说话与聆听时下方浮出声波。不依赖任何文件，素材删光也不会白屏。
-- **形象铺满整屏**（`ui/WhaleScreen.kt`）：形象是根 `Box` 的第一层 `Modifier.fillMaxSize()`，字幕与通话按钮用 `align(BottomCenter) + bottom 152dp` 浮在脸上，不再用 `Modifier.size(260.dp)` 那种固定方框——否则「按屏幕比例铺开」全部失真。当前比例：眼距 ±0.205w、眼长 0.25w、眼高 0.10w、眼线在 0.40h。
-- 素材是**完全外置**的：APK 里没有任何素材文件，只能从「导入素材」选 zip 添加，落到 `filesDir/packs/<id>/`；之后可以改名、同 id 覆盖导入、删除。样本包在 `assets/deepy/`（打好的 `deepy.zip` 也在 `assets/`），推到手机 `Download/` 即可导入。
+- **不再有代码绘制的形象**（原来的线条 Eva 已整体删除）：`WhaleAvatar` 只按情绪取包内动画，取不到就留空，不换别的形象兜底。
+- 内置包 `deepy` 不能删除、不能改名（`deletePack` / `rename` 都会拒绝），设置页把它标成「内置形象」。
+- **通道路由**（`voice/CallSpeechInput.kt`）：进通话时按 蓝牙 SCO → BLE → 有线 → USB → 外放 的顺序选 `CommunicationDevice`（API 31+），并注册 `AudioDeviceCallback` 处理通话中插拔；老系统退回 `isSpeakerphoneOn`。以前无条件开外放，插耳机也不生效。
+- **字幕只占一行**（`ui/WhaleScreen.kt` 的 `captionTail()`）：`maxLines = 1`、约 26 字，超出从前面滚掉；逐字节奏由朗读进度（`UiState.captionChars`）驱动，音画同源。
+- **形象铺满整屏**（`ui/WhaleScreen.kt`）：形象是根 `Box` 的第一层 `Modifier.fillMaxSize()`，字幕与通话按钮用 `align(BottomCenter) + bottom 152dp` 浮在脸上，不再用 `Modifier.size(260.dp)` 那种固定方框。
+- 额外素材仍然**外置**：可以从「导入素材」选 zip 添加，落到 `filesDir/packs/<id>/`；之后可以改名、同 id 覆盖导入、删除。要给别的设备导入时，把 `app/src/main/assets/packs/deepy/` 打包成 zip 即可。
 - 背景跟随素材：`AvatarPacks.tintOf()` 取素材首帧边缘平均色作页面纯色背景（透明底素材返回 null 用主题色）。**这条路径别加渐变**，渐变会让素材四边重新显出轮廓。
 
 ```json
@@ -527,9 +536,9 @@ device-id: <SharedPreferences 里的稳定 UUID>
 
 - `states` 是「动画名 → 文件名」，省略则按 `<动画名>.gif` 猜；
 - `emotions` 是「情绪 key → 动画名」，情绪枚举见 `Emotion`（neutral / happy / sad / angry / surprised / thinking / sleepy / error）；
-- 解析链：情绪 → 动画 → 文件 → 包内 `fallback` → **内置 Eva**。任何一环缺失都不会白屏。
-- 设置页「形象」里列出 `filesDir/packs/` 下的所有包 + Eva，选择存 `SettingsStore.packId`；`packChosen` 为 false（从没手动选过）时默认用扫到的第一个包。
-- **素材包播哪一帧不看 `emotion`，看通话阶段**（`ui/WhaleScreen.kt` 的 `packEmotion`）：没通话 → `sleeping`；开始通话 / 聆听 → `happy`；思考 → `typing`；说完 → 先 `notification`（包内 `idle`）2 秒再回 `happy`。内置 Eva 仍按插件下发的 `emotion` 改眼形，两条路互不影响。
+- 解析链：情绪 → 动画 → 文件 → 包内 `fallback`；全都没有就不画（不再回退到别的形象）。
+- 设置页「形象」列出 `filesDir/packs/` 下的所有包（内置 Deepy 排最前、没有改名/删除按钮），选择存 `SettingsStore.packId`；`packChosen` 为 false（从没手动选过）时默认 `deepy`。
+- **播哪一帧不看 `emotion`，看通话阶段**（`ui/WhaleScreen.kt` 的 `packEmotion`）：没通话 → `sleeping`；开始通话 / 聆听 → `happy`；思考 → `typing`；说完 → 先 `notification`（包内 `idle`）2 秒再回 `happy`。
 - 样本素材已去掉底部的说明文字并逐帧裁成 **224×224**（动画 WebP，48 / 32 / 64 / 48 帧，合计 54 KB，zip 43 KB）；裁切脚本流程见 `docs/dev-guide.md` 第 4 节。
 
 **动画播放**（`ui/WhaleAvatar.kt`）：
@@ -542,9 +551,11 @@ device-id: <SharedPreferences 里的稳定 UUID>
 
 **素材去底板**（`android/tools/strip-avatar-bg.py`）：deepy 的卡片底板是在素材层面抠掉的——逐帧把 `#0D1117` / `#181D29` 一类的底色置为透明，输出带 alpha 的动画 WebP（4 个文件合计约 66 KB，原 GIF 374 KB）。依赖 Pillow：`python -m venv .venv-tools && .venv-tools/Scripts/pip install pillow`，然后 `python android/tools/strip-avatar-bg.py <素材目录> <输出目录>`。
 
+**App 图标**（`android/tools/make-icon.cjs`）：抽 `sleeping.webp` 第 32 帧 → 抠掉 Zzz/气泡 → 裁透明边 → 出 `mipmap-*/ic_launcher_foreground.png`（最近邻缩放，主体占画布 0.56）。依赖 sharp（临时目录 `npm i sharp` 后 `node android/tools/make-icon.cjs`），细节见 `docs/dev-guide.md` 4.1。
+
 之所以废除旧的 `<key>-zh-dark.gif` 命名约定：不同素材的帧率、画布尺寸、留白都不一样，硬编码后缀没法适配，交给打包者在 `pack.json` 里声明最省事。
 
-**素材许可**：`dsh-Go/ASSETS.md:3,19` 明确美术素材不在 AGPL-3.0 范围内，仅限其仓库构建 / 测试 / 展示。`assets/deepy/`（4 个动画 WebP：`notification` 32 帧 / `happy` 48 帧 / `sleeping` 64 帧 / `typing` 48 帧，224×224，已裁掉底部中文说明）是样本素材，**不随 APK 分发**，只作为导入 zip 的示例放在仓库里；`pack.json` 标 `license: private-repo-only`，不对外分发、不用于发布的产品。
+**素材许可**：`dsh-Go/ASSETS.md:3,19` 明确美术素材不在 AGPL-3.0 范围内，仅限其仓库构建 / 测试 / 展示。`app/src/main/assets/packs/deepy/`（4 个动画 WebP：`notification` 32 帧 / `happy` 48 帧 / `sleeping` 64 帧 / `typing` 48 帧，224×224，已裁掉底部中文说明）是内置形象素材，打进 APK；`pack.json` 标 `license: private-repo-only`，只用于本机与私有仓库，不对外分发、不用于发布的产品。
 
 ### 3.11 包可见性与体积约束
 
@@ -554,7 +565,30 @@ device-id: <SharedPreferences 里的稳定 UUID>
 
 ---
 
-## 4. 实测记录（2026-11-07，0.9.0）
+## 4. 实测记录
+
+### 4.1 2026-11-12，0.11.0：WS 长连接 + 流式输出
+
+**改了什么**：`chat` / `asr` / `tts` 三条 HTTP 合成一条 WS（小智协议，见 [`docs/ws-protocol.md`](../docs/ws-protocol.md)），
+音频从「整段 mp3 + `MediaPlayer`」改成「`sentence_start` + 60 ms PCM 帧 + `AudioTrack` 边收边播」，
+字幕从「按 `currentPosition/duration` 逐字」改成「按播放头反查落在哪句、句内比例」。
+
+**构建**：`:app:assembleDebug` 成功，APK 26,658,310 B（**25.42 MiB**），`versionCode=12 / 0.11.0`，无原生库；
+`adb install -r` 通过，冷启动无崩溃。
+
+**真机（OPPO PLE110 / Android 16）**
+
+| 项 | 结果 |
+| --- | --- |
+| 手机 → PC 8787 | 通（PC `10.181.97.185`，手机 `10.181.97.253/24`） |
+| WS 地址拼接 | `ws://10.181.97.185:8787/xiaozhi/v1/`（`adb logcat -s dsh-dbg` 实测） |
+| 旧插件（未重载） | 升级请求返回 404，客户端按 0.5→1→2 s 退避重连，日志符合预期 |
+| 插件重载后通话闭环 | **待测**（需先在 Desktop 重载插件，见下） |
+
+> 一次 `adb shell input tap` 就能验证连通：点一下麦克风按钮，`adb logcat -d -s dsh-dbg` 里出现
+> `ws connect` / `ws failure` / `ws ready` 三行，直接看出卡在 TCP、握手还是 hello。
+
+### 4.2 2026-11-07，0.9.0
 
 **构建**
 
@@ -563,7 +597,7 @@ device-id: <SharedPreferences 里的稳定 UUID>
 | 包名 / 版本 | `com.dsh.channel.whale` / `0.10.1`（code 11） |
 | SDK | minSdk 28 / targetSdk 34 / compileSdk 35 |
 | APK | release 26,515,676 B（**25.29 MiB**）；形象改版后 `:app:assembleDebug` 为 26,691,658 B（25.45 MiB） |
-| 资产 | 无（APK 只带内置 Eva）；样本素材与导入包在仓库根 `assets/` |
+| 资产 | `assets/packs/deepy/`（内置形象，约 54 KB） |
 | 原生库 | 无 |
 
 **PC 侧 ASR**（0.3.0 起未变）
@@ -595,7 +629,7 @@ device-id: <SharedPreferences 里的稳定 UUID>
 
 ## 5. 构建产物
 
-- `android/app/build/outputs/apk/debug/app-debug.apk`（25.22 MiB，debug 签名）。
+- `android/app/build/outputs/apk/debug/app-debug.apk`（25.35 MiB / 26,576,264 B，debug 签名，0.11.0）。
 - `plugin/models/`、`plugin/.venv/` 体积大且可重建，已 gitignore。
 - 旧方案 `archive/out/dsh-android.apk`（`com.dsh.android` 0.2.0，58 KB）与本版无关。
 
@@ -603,11 +637,12 @@ device-id: <SharedPreferences 里的稳定 UUID>
 
 ## 6. 下一步
 
-1. **通话闭环验收**（唯一阻塞）：说一句 → 确认「你：…」「鲸鱼：…」字幕与朗读；再说几句确认连续对话。
-2. **打断验收**：鲸鱼朗读时开口，确认立刻停声且不吞掉新句子的开头；重点看会不会**自己打断自己**（无 AEC 的直接后果）。
-3. **AEC 补救**：先试 `AudioManager.MODE_IN_COMMUNICATION` + `setSpeakerphoneOn(true)` 能否让 `VOICE_COMMUNICATION` 恢复采集；不行就换基于 WebRTC 的 AEC，或接受「朗读期间不打断」的半双工降级。
-4. **流式识别**：现在是「说完再传」，可改成分片上传 + 服务端增量解码，或换成 sherpa-onnx 的 streaming 模型。
-5. **模型升级**：PC 侧换 `vosk-model-cn-0.22`（1.3 GB）或 SenseVoice，客户端零改动；后者中文准确率明显更好。
-6. **VAD 升级**：能量法在噪声环境会误判，可换 WebRTC / Silero VAD；顺带把 `Level` 接到鲸鱼呼吸动画。
-7. **鉴权收口**：把预共享 PIN 换成方案里的 `activation.code → token`，补设备白名单与限次。
-8. **待做项**：唤醒词、后台 / 锁屏保活、WS 长连接、结构化情绪。
+1. **通话闭环验收**（唯一阻塞）：先在 Desktop 重载插件（`lib/index.js` 级改动），再说一句 → 确认「你：…」、逐句字幕与流式朗读；再说几句确认连续对话与排队。
+2. **流式听感验收**：重点看句间有没有空隙（合成抖动时 `Pipeline` 只有一句的余量）、字幕是否跟得上声音、`tts stop` 后是否等播完才回「在听你说」。
+3. **不打断验收**：鲸鱼朗读时开口，确认朗读不中断、新句子的开头不被吞；重点看扬声器会不会被识别成一句话（无 AEC 的直接后果）。
+4. **AEC 补救**：先试 `AudioManager.MODE_IN_COMMUNICATION` + `setSpeakerphoneOn(true)` 能否让 `VOICE_COMMUNICATION` 恢复采集；不行就换基于 WebRTC 的 AEC，那时可以把断句交给服务端（`mode=auto`）并恢复「插话即时静音」。
+5. **流式识别**：现在是「一句整段上行」，可改成分片上行 + 服务端增量解码（`asr_worker.py` 的 Vosk 增量），`listen stop` 只用来收句尾。
+6. **模型升级**：PC 侧换 `vosk-model-cn-0.22`（1.3 GB）或 SenseVoice，客户端零改动；后者中文准确率明显更好。
+7. **VAD 升级**：能量法在噪声环境会误判，可换 WebRTC / Silero VAD；顺带把 `Level` 接到鲸鱼呼吸动画。
+8. **鉴权收口**：把预共享 PIN 换成方案里的 `activation.code → token`（OTA 已经能下发 token，缺的是激活服务），补设备白名单与限次。
+9. **待做项**：唤醒词、后台 / 锁屏保活、结构化情绪（现在 `llm.emotion` 只进状态）、小智设备真机（`/xiaozhi/ota/` 已就绪，缺硬件）。

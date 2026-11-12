@@ -4,10 +4,11 @@
 | ---------- | ------------ | ------------ | ---------- | ---------- | ---------- |
 | 1.0        | 2026/11/05   | 初版：选型、架构、部署与验证方案 |            |            |            |
 | 1.1        | 2026/11/05   | 同步三阶段实施顺序、情绪契约、Waveshare 固件基线；迁至 `docs/` |            |            |            |
+| 1.2        | 2026/11/12   | WS 协议按本文落地（T2/T3 合并），实际实现见 `docs/ws-protocol.md` |            |            |            |
 
 # ESP32 与 DSH 实时通信技术方案
 
-状态：设计阶段，未实现。项目介绍见根 `README.md`，实施顺序与情绪契约以 `TODO.md` 为准。实现目录为 `plugin/`（插件）、`android/`（Android client）、`esp32/`（ESP32 client）。事实依据为 2026-11-05 已检出的 `dsh-Go/`、`xiaozhi-esp32/`、`dsh-mobile-apk/`、`ESP32-S3-Touch-AMOLED-1.75C/` 源码；这些上游检出已在 `.gitignore` 中忽略、不随本仓库分发，文中相关路径引用均指本地检出，推论与未验证项已显式标注。
+状态：**传输层已实现**（2026-11-12，插件 + Android 0.11.0 走 `xiaozhi-esp32` 的 WS 协议，见 `docs/ws-protocol.md`）；ESP32 固件未开始。项目介绍见根 `README.md`，实施顺序与情绪契约以 `TODO.md` 为准。实现目录为 `plugin/`（插件）、`android/`（Android client）、`esp32/`（ESP32 client）。事实依据为 2026-11-05 已检出的 `dsh-Go/`、`xiaozhi-esp32/`、`dsh-mobile-apk/`、`ESP32-S3-Touch-AMOLED-1.75C/` 源码；这些上游检出已在 `.gitignore` 中忽略、不随本仓库分发，文中相关路径引用均指本地检出，推论与未验证项已显式标注。
 
 ## 一、总述
 

@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dsh.channel.whale.Emotion
@@ -156,14 +157,8 @@ fun WhaleScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             // 只留字幕：状态文案统一由底部按钮那一行显示，别在这里再写一遍。
-            Text(
-                text = state.subtitle.ifBlank { " " },
-                color = Color(0xFFC7D2EC),
-                fontSize = 12.sp,
-                lineHeight = 18.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
-            )
+            // 逐字出现，节奏由朗读进度决定（音画同步），超出部分从前面滚掉。
+            CaptionText(state.subtitle, state.captionChars)
             state.message?.let { message ->
                 Spacer(Modifier.height(12.dp))
                 Surface(
@@ -205,7 +200,7 @@ fun WhaleScreen(
             Text(
                 text = when {
                     !state.callActive -> "轻触开始通话"
-                    state.phase == Phase.SPEAKING -> "随口插话就能打断"
+                    state.phase == Phase.SPEAKING -> "可以接着说 · 点一下挂断"
                     state.phase == Phase.THINKING -> "点一下挂断"
                     else -> "在听你说 · 点一下挂断"
                 },
@@ -230,6 +225,63 @@ fun WhaleScreen(
             )
         }
     }
+}
+
+/** 字幕只占一行：多一点就把脸盖住了。 */
+private const val CAPTION_LINES = 1
+
+/** 一行 12sp 中文大约 26 字。 */
+private const val CAPTION_CHARS = 26
+
+/**
+ * 字幕：只显示前 [reveal] 个字。
+ *
+ * 逐字的节奏不在这里算——由朗读进度（[UiState.captionChars]）驱动，
+ * 声音走到哪儿字吐到哪儿，才不会出现「字幕打完了声音还没响」。
+ */
+@Composable
+private fun CaptionText(text: String, reveal: Int) {
+    val shown = text.take(reveal.coerceIn(0, text.length))
+    val typing = reveal in 0 until text.length
+    Text(
+        text = captionTail(if (typing) "$shown▌" else shown).ifBlank { " " },
+        color = Color(0xFFC7D2EC),
+        fontSize = 12.sp,
+        lineHeight = 18.sp,
+        textAlign = TextAlign.Center,
+        maxLines = CAPTION_LINES,
+        overflow = TextOverflow.Clip,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 22.dp),
+    )
+}
+
+/** 句子断点：只在这里断行，切在词中间看起来就像字幕坏了。 */
+private val CAPTION_SENTENCE = Regex("(?<=[。！？!?；;])")
+
+/**
+ * 只保留字幕的最新两行。
+ *
+ * 两条约束：① 模型回复常以一串换行开头（实测 "\n\n\n\n我是…"），直接画出来前两行全是空白，
+ * 看起来就是「没有字幕」，所以先压成单行；② 从后往前按**整句**拼接，宁可少显示一句，
+ * 也不要从半个词中间切开——之前按字数硬切，字幕会忽然只剩半句。
+ */
+private fun captionTail(text: String, maxChars: Int = CAPTION_CHARS): String {
+    val flat = text.replace(Regex("\\s+"), " ").trim()
+    if (flat.length <= maxChars) return flat
+    val sentences = flat.split(CAPTION_SENTENCE).filter { it.isNotBlank() }
+    val out = StringBuilder()
+    for (index in sentences.indices.reversed()) {
+        val sentence = sentences[index]
+        if (out.isEmpty()) {
+            if (sentence.length >= maxChars) return "…" + sentence.takeLast(maxChars - 1)
+            out.insert(0, sentence)
+        } else if (out.length + sentence.length <= maxChars - 1) {
+            out.insert(0, sentence)
+        } else {
+            break
+        }
+    }
+    return "…$out"
 }
 
 /**

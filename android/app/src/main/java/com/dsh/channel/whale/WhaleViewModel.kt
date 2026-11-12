@@ -2,18 +2,20 @@ package com.dsh.channel.whale
 
 import android.app.Application
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.dsh.channel.whale.net.AudioSpec
 import com.dsh.channel.whale.net.LanDiscovery
 import com.dsh.channel.whale.net.PluginClient
 import com.dsh.channel.whale.net.SettingsStore
+import com.dsh.channel.whale.net.WsSession
 import com.dsh.channel.whale.ui.AvatarPack
 import com.dsh.channel.whale.ui.AvatarPacks
 import com.dsh.channel.whale.voice.CallSpeechInput
 import com.dsh.channel.whale.voice.SpeechInput
-import com.dsh.channel.whale.voice.TtsOutput
+import com.dsh.channel.whale.voice.StreamingPlayer
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,8 +45,10 @@ data class UiState(
     val phase: Phase = Phase.IDLE,
     val emotion: Emotion = Emotion.NEUTRAL,
     val subtitle: String = "",
+    /** 字幕已经「念」到第几个字：由播放头推进，音画同步就靠它。 */
+    val captionChars: Int = 0,
     val status: String = "轻触开始通话",
-    /** 是否处于通话（麦克风常驻打开，可随时插话）。 */
+    /** 是否处于通话（麦克风常驻打开，说的话照常排队）。 */
     val callActive: Boolean = false,
     val showSettings: Boolean = false,
     val endpointInput: String = "",
@@ -56,8 +60,8 @@ data class UiState(
     val message: String? = null,
     /** assets/packs 里扫到的形象包。 */
     val packs: List<AvatarPack> = emptyList(),
-    /** 当前形象包 id；空 = 内置 Eva。 */
-    val packId: String = "",
+    /** 当前形象包 id；默认是内置的 Deepy。 */
+    val packId: String = AvatarPacks.BUILT_IN,
     /** 页面背景色：取当前素材的底色，素材和背景同色才融得进去。 */
     val tint: Int = DEFAULT_TINT,
 ) {
@@ -67,55 +71,56 @@ data class UiState(
 }
 
 /**
- * 通话状态机：常驻监听 → 一句话识别 → 插件 NDJSON → 字幕 / 情绪 → 朗读。
+ * 通话状态机：一条 WS 长连接跑完「说话 → 识别 → 对话 → 朗读」。
  *
- * 打断规则（不需要按钮）：
- * - 朗读中检测到人声 → 立刻停朗读，接着把这句话当作新输入（[SpeechInput.Event.SpeechStarted]）；
- * - 思考中检测到人声 → 取消还在进行的请求，改听新的；
- * - 识别失败 / 网络失败只提示，不退出通话；麦克风起不来才退出。
+ * 与服务端的分工（xiaozhi 协议，见 docs/ws-protocol.md）：
+ * - 上行：本地能量 VAD 断句，每句发 `listen start` + PCM + `listen stop`；
+ * - 服务端：识别 → DSH 会话 → 逐句合成 → 按 60 ms 节奏推 PCM，同时下发
+ *   `stt` / `llm` / `tts start|sentence_start|stop`；
+ * - 播放：AudioTrack 流式边收边播，字幕跟播放头走（[StreamingPlayer]）。
+ *
+ * 打断规则：朗读不打断。说话时照常识别，服务端把新回复排在当前音频后面播；
+ * 只有挂断 / 服务端异常才停声。
  */
 class WhaleViewModel(app: Application) : AndroidViewModel(app) {
     private val store = SettingsStore(app)
-    private val client = PluginClient(store)
+    private val health = PluginClient(store)
     private val discovery = LanDiscovery()
-    private var chatJob: Job? = null
 
-    /**
-     * 麦克风开关必须离开主线程。
-     *
-     * `CallSpeechInput.start()` 里要切音频模式、开 `AudioRecord`、再采 5 帧判断这个采集源是否
-     * 可用（最坏 500 ms），`stop()` 还要 join 工作线程；直接在点击回调里跑，就是「点了半天
-     * 才有反应」。单线程队列保证 start/stop 不会交叉执行。
-     */
+    /** 麦克风开关必须离开主线程（AudioRecord + 采集源探测，最坏 500 ms）。 */
     private val speechWorker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "speech-lifecycle").apply { isDaemon = true }
     }
 
+    private val player = StreamingPlayer(
+        onCaption = { text, chars -> onCaption(text, chars) },
+        onDrained = { onSpeechDrained() },
+    )
+
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
-    private val tts = TtsOutput(
-        app,
-        endpoint = { store.endpoint },
-        pin = { store.pin },
-        deviceId = { store.deviceId },
-        onDone = { onTtsDone() },
-        onError = { message -> fail(message) },
-    )
+    private val ws = WsSession(store)
 
     private val speech: SpeechInput = CallSpeechInput(
         app,
-        endpoint = { store.endpoint },
-        pin = { store.pin },
-        deviceId = { store.deviceId },
-        playing = { tts.isSpeaking() },
+        sink = object : CallSpeechInput.Sink {
+            override fun ready(): Boolean = ws.isReady
+            override fun begin() = ws.beginUtterance()
+            override fun write(pcm: ByteArray) = ws.sendAudio(pcm)
+            override fun end() = ws.endUtterance()
+        },
+        playing = { player.isActive() },
     ) { event -> onSpeechEvent(event) }
 
+    /** 通话中麦克风是否已经打开（WS 重连不要反复重启采集）。 */
+    private var micStarted = false
+
     init {
+        ws.listener = wsListener()
         val packs = AvatarPacks.load(getApplication())
-        // 没选过形象时直接用扫到的第一个包：装机后默认就该是包里的动态形象，
-        // 否则新用户看到的永远是内置 Eva，和形象包没关系。
-        val packId = if (store.packChosen) store.packId else packs.firstOrNull()?.id.orEmpty()
+        // 没选过形象就用内置的 Deepy；旧版本存下的空 id（当年代表内置 Eva）也归到 Deepy。
+        val packId = if (store.packChosen) store.packId.ifBlank { AvatarPacks.BUILT_IN } else AvatarPacks.BUILT_IN
         _ui.update {
             it.copy(
                 endpointInput = store.endpoint,
@@ -127,14 +132,14 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { refreshTint(packId) }
     }
 
-    /** 切换形象包；空字符串回到内置 Eva。 */
+    /** 切换形象包（内置的是 [AvatarPacks.BUILT_IN]，删不掉）。 */
     fun selectPack(id: String) {
         store.packId = id
         _ui.update { it.copy(packId = id) }
         viewModelScope.launch { refreshTint(id) }
     }
 
-    /** 取素材底色当页面背景；没有素材（内置 Eva）时回到主题色。 */
+    /** 取素材底色当页面背景；取不到就用主题色。 */
     private suspend fun refreshTint(packId: String) {
         val pack = AvatarPacks.find(_ui.value.packs, packId)
         val tint = withContext(Dispatchers.IO) {
@@ -166,8 +171,12 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 删除素材包（含随包素材）；正在用时回退到内置 Eva。 */
+    /** 删除素材包（含随包素材）；正在用时回退到内置 Deepy。内置包不允许删。 */
     fun deletePack(id: String) {
+        if (id == AvatarPacks.BUILT_IN) {
+            _ui.update { it.copy(message = "内置形象不能删除") }
+            return
+        }
         val pack = _ui.value.packs.firstOrNull { it.id == id } ?: return
         viewModelScope.launch {
             val removed = runCatching {
@@ -204,6 +213,108 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- WS 事件（全部在主线程） ----
+
+    private fun wsListener(): WsSession.Listener = object : WsSession.Listener {
+        override fun onOpen(sessionId: String, audio: AudioSpec) {
+            Log.d("dsh-dbg", "ws ready session=$sessionId audio=$audio")
+            player.configure(audio.sampleRate)
+            if (!_ui.value.callActive) return
+            _ui.update {
+                it.copy(reachable = true, phase = Phase.LISTENING, status = "在听你说…", message = null)
+            }
+            startMicIfNeeded()
+        }
+
+        override fun onStt(text: String) {
+            if (!_ui.value.callActive) return
+            Log.d("dsh-dbg", "stt len=${text.length} text=$text")
+            val line = if (text.isBlank()) "没听清，再说一次" else "你：$text"
+            _ui.update { state ->
+                // 正在朗读时不抢字幕：这句话的回复会排在当前音频后面。
+                if (state.phase == Phase.SPEAKING) {
+                    state.copy(emotion = Emotion.THINKING)
+                } else {
+                    state.copy(
+                        phase = Phase.THINKING,
+                        emotion = Emotion.THINKING,
+                        subtitle = line,
+                        captionChars = line.length,
+                        status = if (text.isBlank()) "没听清，再说一次" else "Deepy 正在想…",
+                        message = null,
+                    )
+                }
+            }
+        }
+
+        override fun onEmotion(emotion: String) {
+            _ui.update { it.copy(emotion = Emotion.parse(emotion)) }
+        }
+
+        override fun onSpeechStart() {
+            if (!_ui.value.callActive) return
+            // 第一句还在合成（edge-tts 是在线服务，偶尔要十几秒），先别谎称「在说话」。
+            _ui.update {
+                if (it.phase == Phase.SPEAKING) it
+                else it.copy(phase = Phase.SPEAKING, status = "正在准备回复…", message = null)
+            }
+        }
+
+        override fun onSentence(text: String) {
+            if (!_ui.value.callActive) return
+            // 只登记句子边界：字幕在哪一刻切过去由播放头决定（见 StreamingPlayer）。
+            _ui.update {
+                if (it.phase == Phase.SPEAKING) it.copy(status = "Deepy 在说话…")
+                else it.copy(phase = Phase.SPEAKING, status = "Deepy 在说话…", message = null)
+            }
+            player.mark(text)
+        }
+
+        override fun onAudio(pcm: ByteArray) {
+            player.write(pcm)
+        }
+
+        override fun onSpeechStop() {
+            player.finishSpeech()
+        }
+
+        override fun onAlert(message: String) {
+            fail(message)
+        }
+
+        override fun onClosed() {
+            if (!_ui.value.callActive) return
+            Log.d("dsh-dbg", "ws closed, waiting reconnect")
+            _ui.update {
+                it.copy(
+                    reachable = false,
+                    status = "连接断开，正在重连…",
+                    phase = if (it.phase == Phase.SPEAKING) it.phase else Phase.LISTENING,
+                )
+            }
+        }
+    }
+
+    /** 字幕：句子文本 + 已经念到的字数（都由播放头折算，所以切换句子不会抢在声音前面）。 */
+    private fun onCaption(text: String, chars: Int) {
+        _ui.update {
+            if (it.phase != Phase.SPEAKING) it else it.copy(subtitle = text, captionChars = chars)
+        }
+    }
+
+    /** 队列播完：回聆听（通话中）。 */
+    private fun onSpeechDrained() {
+        _ui.update {
+            when {
+                it.callActive && it.phase == Phase.SPEAKING -> it.copy(phase = Phase.LISTENING, status = "在听你说…")
+                !it.callActive && it.phase == Phase.SPEAKING -> it.copy(phase = Phase.IDLE, status = "轻触开始通话")
+                else -> it.copy(captionChars = it.subtitle.length)
+            }
+        }
+    }
+
+    // ---- 通话 ----
+
     /** 通话开关：第一次点亮麦克风，再点挂断。权限由 Activity 保证后再调用。 */
     fun onCallToggle() {
         if (_ui.value.callActive) {
@@ -215,47 +326,53 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun startCall() {
         if (store.endpoint.isBlank()) {
-            _ui.update {
-                it.copy(showSettings = true, message = "请先连接桌面端")
-            }
+            _ui.update { it.copy(showSettings = true, message = "请先连接桌面端") }
             return
         }
+        micStarted = false
         _ui.update {
             it.copy(
                 callActive = true,
                 phase = Phase.LISTENING,
                 emotion = Emotion.NEUTRAL,
                 subtitle = "",
-                status = "正在打开麦克风…",
+                captionChars = 0,
+                status = "正在连接…",
                 message = null,
             )
         }
-        // UI 先切到「在听你说…」，麦克风在后台线程慢慢开，点击不会有卡顿。
+        ws.connect()
+    }
+
+    private fun startMicIfNeeded() {
+        if (micStarted) return
+        micStarted = true
         speechWorker.execute { runCatching { speech.start() } }
     }
 
     private fun endCall(status: String = "轻触开始通话") {
+        micStarted = false
         speechWorker.execute { runCatching { speech.stop() } }
-        chatJob?.cancel()
-        chatJob = null
-        tts.stop()
+        ws.close()
+        player.stop()
         _ui.update {
             it.copy(
                 callActive = false,
                 phase = Phase.IDLE,
                 emotion = Emotion.NEUTRAL,
+                captionChars = it.subtitle.length,
                 status = status,
             )
         }
     }
 
     private fun onSpeechEvent(event: SpeechInput.Event) {
+        if (event !is SpeechInput.Event.Level) Log.d("dsh-dbg", "speech=$event")
         when (event) {
             SpeechInput.Event.Ready -> _ui.update {
-                if (it.callActive) it.copy(phase = Phase.LISTENING, status = "在听你说…") else it
+                if (it.callActive) it.copy(status = "在听你说…") else it
             }
             SpeechInput.Event.SpeechStarted -> onUserSpeak()
-            is SpeechInput.Event.Result -> sendToPlugin(event.text)
             SpeechInput.Event.Recognizing -> Unit
             is SpeechInput.Event.Level -> Unit
             is SpeechInput.Event.Error -> fail(event.message)
@@ -265,91 +382,19 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 用户开口：朗读中就停朗读，思考中就撤请求，随后由本句识别结果接管。 */
+    /** 用户开口不再打断朗读：这句话照常上行、服务端排队，当前音频播完再播下一段。 */
     private fun onUserSpeak() {
-        val state = _ui.value
-        if (!state.callActive) return
-        when (state.phase) {
-            Phase.SPEAKING -> {
-                tts.stop()
-                _ui.update {
-                    it.copy(phase = Phase.LISTENING, emotion = Emotion.NEUTRAL, status = "已打断，你继续说")
-                }
-            }
-            Phase.THINKING -> {
-                chatJob?.cancel()
-                _ui.update {
-                    it.copy(phase = Phase.LISTENING, status = "已打断，你继续说")
-                }
-            }
-            else -> Unit
-        }
-    }
-
-    private fun sendToPlugin(text: String) {
-        chatJob?.cancel()
-        _ui.update {
-            it.copy(
-                phase = Phase.THINKING,
-                emotion = Emotion.THINKING,
-                subtitle = "你：$text",
-                status = "Eva 正在想…",
-                message = null,
-            )
-        }
-        val reply = StringBuilder()
-        var failed = false
-        chatJob = viewModelScope.launch {
-            client.chat(text).collect { event ->
-                if (failed) return@collect
-                when (event) {
-                    is PluginClient.Event.Delta -> {
-                        reply.append(event.text)
-                        _ui.update { it.copy(subtitle = "Eva：$reply") }
-                    }
-                    is PluginClient.Event.Mood ->
-                        _ui.update { it.copy(emotion = Emotion.parse(event.emotion)) }
-                    is PluginClient.Event.Done -> {
-                        val full = event.text.ifBlank { reply.toString() }
-                        _ui.update {
-                            it.copy(
-                                subtitle = if (full.isBlank()) "Eva：…" else "Eva：$full",
-                                phase = Phase.SPEAKING,
-                                status = "Eva 在说话…（随口插话就能打断）",
-                            )
-                        }
-                        tts.speak(full)
-                    }
-                    is PluginClient.Event.Failure -> {
-                        failed = true
-                        fail(event.message)
-                    }
-                    is PluginClient.Event.State -> Unit
-                }
-            }
-        }
-    }
-
-    /** 朗读结束：通话中自动回到「听」，否则回待机。 */
-    private fun onTtsDone() {
-        _ui.update {
-            when {
-                !it.callActive && it.phase == Phase.SPEAKING ->
-                    it.copy(phase = Phase.IDLE, status = "轻触开始通话")
-                it.callActive && it.phase == Phase.SPEAKING ->
-                    it.copy(phase = Phase.LISTENING, status = "在听你说…")
-                else -> it
-            }
-        }
+        Log.d("dsh-dbg", "user spoke, phase=${_ui.value.phase}")
     }
 
     /** 通话中失败只提示、继续听；没有通话时回待机。 */
     private fun fail(message: String) {
         _ui.update {
-            if (it.callActive) {
-                it.copy(phase = Phase.LISTENING, status = "在听你说…", message = message)
+            val shown = it.copy(captionChars = it.subtitle.length)
+            if (shown.callActive) {
+                shown.copy(status = "在听你说…", message = message)
             } else {
-                it.copy(phase = Phase.IDLE, emotion = Emotion.ERROR, status = message, message = message)
+                shown.copy(phase = Phase.IDLE, emotion = Emotion.ERROR, status = message, message = message)
             }
         }
     }
@@ -404,7 +449,7 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
         store.pin = _ui.value.pinInput
         _ui.update { it.copy(reachable = false, endpointInput = store.endpoint, message = "正在连接…") }
         viewModelScope.launch {
-            val result = client.health()
+            val result = health.check()
             _ui.update { state ->
                 state.copy(
                     reachable = result.isSuccess,
@@ -418,10 +463,10 @@ class WhaleViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
-        chatJob?.cancel()
+        ws.close()
         speechWorker.execute { runCatching { speech.close() } }
         speechWorker.shutdown()
-        tts.shutdown()
+        player.release()
         super.onCleared()
     }
 }

@@ -2,6 +2,8 @@ package com.dsh.channel.whale.voice
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
@@ -9,47 +11,54 @@ import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AudioEffect
 import android.media.audiofx.NoiseSuppressor
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
-import com.dsh.channel.whale.net.AsrClient
+import android.util.Log
 import java.io.ByteArrayOutputStream
-import java.net.URI
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
- * 通话模式语音输入：麦克风常驻打开，边听边说（barge-in），不需要按住或点按。
+ * 通话模式语音输入：麦克风常驻打开，边听边说，不需要按住或点按。
  *
  * 线程模型：
- * - capture 线程：`AudioRecord` 逐帧读 100 ms，能量 VAD 切句；切出的整段 PCM 投给识别线程；
- * - asr 线程（单线程池）：串行 `POST /api/asr`，因此识别耗时不会挡住继续听；
- * - 事件统一 post 回主线程，`stop()` 递增 generation 丢弃过期结果。
+ * - capture 线程：`AudioRecord` 逐帧读 100 ms，能量 VAD 切句；切出的整段 PCM 交给 [Sink]；
+ * - [Sink] 背后是 WS 长连接（`listen start` + PCM + `listen stop`），识别在插件端，
+ *   所以这里不再占用第二个线程等 HTTP 返回，采集完全不阻塞；
+ * - 事件统一 post 回主线程，`stop()` 递增 generation 丢弃过期事件。
  *
- * 打断（回声是这里唯一的难点）：
+ * 断句为什么留在手机侧：这台机器拿不到平台 AEC（`VOICE_COMMUNICATION` 返回全 0），
+ * 服务端断句会把外放回声也切进去。本地 VAD 能靠「朗读期抬阈值 + 起步片段丢弃」把回声压掉。
+ *
+ * 回声处理：
  * 1. 采集源优先 `VOICE_COMMUNICATION` 并启用 `AcousticEchoCanceler` / `NoiseSuppressor`；
- * 2. 朗读期间把 VAD 阈值抬到 `max(噪声底 × 2.5, 1200)`，并要求连续发声 [ONSET_PLAY_MS] 才认定，
- *    单个噪声帧 / 扬声器残留不会误打断；
- * 3. 朗读期间起步、又始终没被认定为「人声」的片段直接丢弃，不送去识别（否则会把自己的回声
+ * 2. 朗读期间把 VAD 阈值抬到 `max(噪声底 × 3.5, 回声峰值 × 2.5, 700)`，并要求连续发声才认定；
+ * 3. 朗读期间起步、又始终没被认定为人声的片段直接丢弃，不发出去（否则会把自己的回声
  *    当成用户的话再问一遍模型）；
- * 4. 判定为人声立刻上抛 [SpeechInput.Event.SpeechStarted]，上层停朗读；本段缓冲从开口前
- *    [PRE_ROLL_FRAMES] 帧开始保留，所以打断后的头几个字不会丢。
+ * 4. 判定为人声抛 [SpeechInput.Event.SpeechStarted]；本段缓冲从开口前
+ *    [PRE_ROLL_FRAMES] 帧开始保留，头几个字不丢。
  *
- * 全双工依赖设备 AEC：机器没有 AEC 时仍可用，只是嘈杂环境可能误打断（见 docs）。
+ * 朗读不被打断：识别结果照常上行，服务端排队，当前回复播完再播下一段。
  */
 class CallSpeechInput(
     context: Context,
-    private val endpoint: () -> String,
-    private val pin: () -> String,
-    private val deviceId: () -> String,
-    /** 是否正在播放朗读（决定 VAD 阈值与打断判定）。 */
+    private val sink: Sink,
+    /** 是否正在播放朗读（决定 VAD 阈值与回声判定）。 */
     private val playing: () -> Boolean,
     private val onEvent: (SpeechInput.Event) -> Unit,
 ) : SpeechInput {
+
+    /** 一句话的出口：由上层接到 WS 的 listen start/stop 上。 */
+    interface Sink {
+        fun ready(): Boolean
+        fun begin()
+        fun write(pcm: ByteArray)
+        fun end()
+    }
 
     private companion object {
         const val SAMPLE_RATE = 16_000
@@ -71,7 +80,6 @@ class CallSpeechInput(
         const val PRE_ROLL_FRAMES = 3            // 开口前保留 300 ms
     }
 
-    private val asr = AsrClient()
     private val main = Handler(Looper.getMainLooper())
     private val audioManager =
         context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -80,32 +88,20 @@ class CallSpeechInput(
     private var callAudioMode = false
     private var prevAudioMode = AudioManager.MODE_NORMAL
     private var prevSpeakerOn = false
+    private var deviceCallback: AudioDeviceCallback? = null
 
     @Volatile private var running = false
     @Volatile private var generation = 0
     private var worker: Thread? = null
-    private var asrExecutor: ExecutorService? = null
     private var activeRecord: AudioRecord? = null
     private var aec: AcousticEchoCanceler? = null
     private var suppressor: NoiseSuppressor? = null
-
-    /** 插件地址 → ASR 地址：同主机同端口，防火墙只需放行一个进程。 */
-    private fun asrUrl(): String {
-        val raw = endpoint().trim()
-        if (raw.isEmpty()) return ""
-        val uri = runCatching { URI(if (raw.contains("://")) raw else "http://$raw") }.getOrNull()
-            ?: return ""
-        val host = uri.host ?: return ""
-        val port = if (uri.port > 0) uri.port else 8787
-        return "http://$host:$port/api/asr"
-    }
 
     @SuppressLint("MissingPermission")
     override fun start() {
         stop()
         val gen = generation
-        val url = asrUrl()
-        if (url.isEmpty()) {
+        if (!sink.ready()) {
             failStart(gen, "还没连接桌面端，请先在设置里填写地址")
             return
         }
@@ -140,11 +136,14 @@ class CallSpeechInput(
             suppressor = createEffect(record.audioSessionId) { NoiseSuppressor.create(it)?.apply { enabled = true } }
         }
 
+        val comm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) audioManager.communicationDevice?.type else -1
+        Log.d(
+            "dsh-dbg",
+            "start fullDuplex=$fullDuplex mode=${audioManager.mode} comm=$comm speaker=${audioManager.isSpeakerphoneOn}",
+        )
+
         running = true
-        asrExecutor = Executors.newSingleThreadExecutor { r ->
-            Thread(r, "call-asr").apply { isDaemon = true }
-        }
-        val thread = Thread({ captureLoop(gen, record, url, fullDuplex) }, "call-capture")
+        val thread = Thread({ captureLoop(gen, record, fullDuplex) }, "call-capture")
             .apply { isDaemon = true }
         worker = thread
         thread.start()
@@ -205,16 +204,59 @@ class CallSpeechInput(
         if (callAudioMode) return
         prevAudioMode = audioManager.mode
         prevSpeakerOn = audioManager.isSpeakerphoneOn
-        runCatching {
-            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-            audioManager.isSpeakerphoneOn = true
-        }
+        runCatching { audioManager.mode = AudioManager.MODE_IN_COMMUNICATION }
         callAudioMode = true
+        routeAudio()
+        registerDeviceCallback()
+    }
+
+    /**
+     * 选通话通道：有线 / USB / 蓝牙耳机优先，没有耳机才用外放。
+     *
+     * 以前这里无条件 `isSpeakerphoneOn = true`，插着耳机也照样从外放出声、用机身麦克风，
+     * 所以通话时耳机完全没用。API 31+ 用 `setCommunicationDevice()` 显式指定；
+     * 更老的系统只能靠 `isSpeakerphoneOn` + `startBluetoothSco()`。
+     */
+    private fun routeAudio() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val available = runCatching { audioManager.availableCommunicationDevices }.getOrDefault(emptyList())
+            val target = available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+                ?: available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLE_HEADSET }
+                ?: available.firstOrNull { it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET }
+                ?: available.firstOrNull { it.type == AudioDeviceInfo.TYPE_USB_HEADSET }
+                ?: available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            if (target != null) runCatching { audioManager.setCommunicationDevice(target) }
+            return
+        }
+        @Suppress("DEPRECATION")
+        val wired = audioManager.isWiredHeadsetOn
+        @Suppress("DEPRECATION")
+        val bluetooth = audioManager.isBluetoothScoOn || audioManager.isBluetoothA2dpOn
+        runCatching {
+            if (bluetooth && !audioManager.isBluetoothScoOn) audioManager.startBluetoothSco()
+            @Suppress("DEPRECATION")
+            audioManager.isSpeakerphoneOn = !wired && !bluetooth
+        }
+    }
+
+    /** 通话中插拔耳机会触发；重算一次通道即可，采集线程会跟到新的默认设备。 */
+    private fun registerDeviceCallback() {
+        if (deviceCallback != null) return
+        val callback = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = routeAudio()
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = routeAudio()
+        }
+        deviceCallback = callback
+        runCatching { audioManager.registerAudioDeviceCallback(callback, null) }
     }
 
     private fun restoreAudioMode() {
+        deviceCallback?.let { runCatching { audioManager.unregisterAudioDeviceCallback(it) } }
+        deviceCallback = null
         if (!callAudioMode) return
         runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) audioManager.clearCommunicationDevice()
+            @Suppress("DEPRECATION")
             audioManager.isSpeakerphoneOn = prevSpeakerOn
             audioManager.mode = prevAudioMode
         }
@@ -224,7 +266,7 @@ class CallSpeechInput(
     private fun <T : AudioEffect> createEffect(sessionId: Int, factory: (Int) -> T?): T? =
         runCatching { factory(sessionId) }.getOrNull()
 
-    private fun captureLoop(gen: Int, record: AudioRecord, url: String, fullDuplex: Boolean) {
+    private fun captureLoop(gen: Int, record: AudioRecord, fullDuplex: Boolean) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
         val buf = ShortArray(FRAME_SAMPLES)
         val preRoll = ArrayDeque<ByteArray>()
@@ -359,7 +401,7 @@ class CallSpeechInput(
                             preRoll.clear()
                             state = Vad.SILENT
                             silenceMs = 0f
-                            if (!echo && length >= MIN_SPEECH_MS) transcribe(gen, url, pcm)
+                            if (!echo && length >= MIN_SPEECH_MS) sendUtterance(gen, pcm)
                         }
                     }
 
@@ -378,25 +420,17 @@ class CallSpeechInput(
         }
     }
 
-    /** 一句 PCM → /api/asr；识别在独立线程，采集不中断。 */
-    private fun transcribe(gen: Int, url: String, pcm: ByteArray) {
-        val executor = asrExecutor ?: return
-        val pinValue = pin()
-        val device = deviceId()
+    /**
+     * 一句 PCM → WS（listen start + 帧 + listen stop）。
+     * WS 的 send 只是入队，不会阻塞采集；识别结果从连接上以 `stt` 回来。
+     */
+    private fun sendUtterance(gen: Int, pcm: ByteArray) {
         emit(gen, SpeechInput.Event.Recognizing)
         runCatching {
-            executor.execute {
-                val result = asr.transcribe(url, pcm, pinValue, device)
-                if (gen != generation) return@execute
-                result.fold(
-                    onSuccess = { text ->
-                        // 通话模式不因「没听清」打断节奏：空文本静默丢弃。
-                        if (text.isNotBlank()) emit(gen, SpeechInput.Event.Result(text))
-                    },
-                    onFailure = { emit(gen, SpeechInput.Event.Error(it.message ?: "识别失败，再试一次")) },
-                )
-            }
-        }
+            sink.begin()
+            sink.write(pcm)
+            sink.end()
+        }.onFailure { emit(gen, SpeechInput.Event.Error("发送失败，请确认和电脑在同一网络")) }
     }
 
     override fun stop() {
@@ -408,8 +442,6 @@ class CallSpeechInput(
         if (thread != null && thread !== Thread.currentThread() && thread.isAlive) {
             runCatching { thread.join(400) }
         }
-        asrExecutor?.shutdownNow()
-        asrExecutor = null
         releaseEffects()
         restoreAudioMode()
     }
